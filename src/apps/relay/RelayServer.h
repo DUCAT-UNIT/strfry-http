@@ -4,6 +4,7 @@
 #include <memory>
 #include <algorithm>
 #include <future>
+#include <thread>
 
 #include <hoytech/time.h>
 #include <hoytech/hex.h>
@@ -12,7 +13,6 @@
 #include <tao/json.hpp>
 
 #include "golpe.h"
-
 #include "Subscription.h"
 #include "ThreadPool.h"
 #include "events.h"
@@ -28,266 +28,218 @@ struct ProcessResult {
     std::string eventId;
 };
 
-struct MsgWebsocket : NonCopyable
-{
-    struct Send
-    {
+struct MsgWebsocket : NonCopyable {
+    struct Send {
         uint64_t connId;
         std::string payload;
     };
 
-    struct SendBinary
-    {
+    struct SendBinary {
         uint64_t connId;
         std::string payload;
     };
 
-    struct SendEventToBatch
-    {
+    struct SendEventToBatch {
         RecipientList list;
         std::string evJson;
     };
 
-    struct GracefulShutdown
-    {
-    };
+    struct GracefulShutdown {};
 
     using Var = std::variant<Send, SendBinary, SendEventToBatch, GracefulShutdown>;
     Var msg;
-    MsgWebsocket(Var &&msg_) : msg(std::move(msg_)) {}
+    MsgWebsocket(Var&& msg_) : msg(std::move(msg_)) {}
 };
 
-struct MsgIngester : NonCopyable
-{
-    struct ClientMessage
-    {
+struct MsgIngester : NonCopyable {
+    struct ClientMessage {
         uint64_t connId;
         std::string ipAddr;
         std::string payload;
         std::shared_ptr<std::promise<ProcessResult>> resultPromise = nullptr;
     };
 
-    struct CloseConn
-    {
+    struct CloseConn {
         uint64_t connId;
     };
 
     using Var = std::variant<ClientMessage, CloseConn>;
     Var msg;
-    MsgIngester(Var &&msg_) : msg(std::move(msg_)) {}
+    MsgIngester(Var&& msg_) : msg(std::move(msg_)) {}
 };
 
-struct MsgWriter : NonCopyable
-{
-    struct AddEvent
-    {
+struct MsgWriter : NonCopyable {
+    struct AddEvent {
         uint64_t connId;
         std::string ipAddr;
         std::string packedStr;
         std::string jsonStr;
     };
 
-    struct CloseConn
-    {
+    struct CloseConn {
         uint64_t connId;
     };
 
     using Var = std::variant<AddEvent, CloseConn>;
     Var msg;
-    MsgWriter(Var &&msg_) : msg(std::move(msg_)) {}
+    MsgWriter(Var&& msg_) : msg(std::move(msg_)) {}
 };
 
-struct MsgReqWorker : NonCopyable
-{
-    struct NewSub
-    {
+struct MsgReqWorker : NonCopyable {
+    struct NewSub {
         Subscription sub;
     };
 
-    struct RemoveSub
-    {
+    struct RemoveSub {
         uint64_t connId;
         SubId subId;
     };
 
-    struct CloseConn
-    {
+    struct CloseConn {
         uint64_t connId;
     };
 
     using Var = std::variant<NewSub, RemoveSub, CloseConn>;
     Var msg;
-    MsgReqWorker(Var &&msg_) : msg(std::move(msg_)) {}
+    MsgReqWorker(Var&& msg_) : msg(std::move(msg_)) {}
 };
 
-struct MsgReqMonitor : NonCopyable
-{
-    struct NewSub
-    {
+struct MsgReqMonitor : NonCopyable {
+    struct NewSub {
         Subscription sub;
     };
 
-    struct RemoveSub
-    {
+    struct RemoveSub {
         uint64_t connId;
         SubId subId;
     };
 
-    struct CloseConn
-    {
+    struct CloseConn {
         uint64_t connId;
     };
 
-    struct DBChange
-    {
-    };
+    struct DBChange {};
 
     using Var = std::variant<NewSub, RemoveSub, CloseConn, DBChange>;
     Var msg;
-    MsgReqMonitor(Var &&msg_) : msg(std::move(msg_)) {}
+    MsgReqMonitor(Var&& msg_) : msg(std::move(msg_)) {}
 };
 
-struct MsgNegentropy : NonCopyable
-{
-    struct NegOpen
-    {
+struct MsgNegentropy : NonCopyable {
+    struct NegOpen {
         Subscription sub;
         std::string filterStr;
         std::string negPayload;
     };
 
-    struct NegMsg
-    {
+    struct NegMsg {
         uint64_t connId;
         SubId subId;
         std::string negPayload;
     };
 
-    struct NegClose
-    {
+    struct NegClose {
         uint64_t connId;
         SubId subId;
     };
 
-    struct CloseConn
-    {
+    struct CloseConn {
         uint64_t connId;
     };
 
     using Var = std::variant<NegOpen, NegMsg, NegClose, CloseConn>;
     Var msg;
-    MsgNegentropy(Var &&msg_) : msg(std::move(msg_)) {}
+    MsgNegentropy(Var&& msg_) : msg(std::move(msg_)) {}
 };
 
-// NIP-42 stuff
-struct AuthStatus
-{
+struct AuthStatus {
     std::string challenge;
     std::string authed;
 };
 
-struct RelayServer
-{
-    uS::Async *hubTrigger = nullptr;
+struct RelayServer {
+    uS::Async* hubTrigger = nullptr;
 
-    // Thread Pools
     ThreadPool<MsgWebsocket> tpWebsocket;
     ThreadPool<MsgIngester> tpIngester;
     ThreadPool<MsgWriter> tpWriter;
     ThreadPool<MsgReqWorker> tpReqWorker;
     ThreadPool<MsgReqMonitor> tpReqMonitor;
     ThreadPool<MsgNegentropy> tpNegentropy;
+    
     std::thread cronThread;
     std::thread signalHandlerThread;
     std::unique_ptr<HttpServer> httpServer;
     std::thread httpThread;
 
-    void runHttpServer();
     void run();
-
-    void runWebsocket(ThreadPool<MsgWebsocket>::Thread &thr);
-
-    void runIngester(ThreadPool<MsgIngester>::Thread &thr);
-    void ingesterProcessEvent(
-        lmdb::txn &txn, 
-        uint64_t connId, 
-        flat_hash_map<uint64_t, AuthStatus *> &connIdToAuthStatus, 
-        std::string ipAddr, 
-        secp256k1_context *secpCtx, 
-        const tao::json::value &origJson, 
-        std::vector<MsgWriter> &output,
-        std::shared_ptr<std::promise<ProcessResult>> resultPromise = nullptr
-    );
-    void ingesterProcessReq(lmdb::txn &txn, uint64_t connId, const tao::json::value &origJson);
-    void ingesterProcessClose(lmdb::txn &txn, uint64_t connId, const tao::json::value &origJson);
-    void ingesterProcessAuth(uint64_t connId, flat_hash_map<uint64_t, AuthStatus *> connIdToAuthStatus, secp256k1_context *secpCtx, const tao::json::value &eventJson);
-    void ingesterProcessNegentropy(lmdb::txn &txn, Decompressor &decomp, uint64_t connId, const tao::json::value &origJson);
-
-    void runWriter(ThreadPool<MsgWriter>::Thread &thr);
-
-    void runReqWorker(ThreadPool<MsgReqWorker>::Thread &thr);
-
-    void runReqMonitor(ThreadPool<MsgReqMonitor>::Thread &thr);
-
-    void runNegentropy(ThreadPool<MsgNegentropy>::Thread &thr);
-
+    void runHttpServer();
+    void runWebsocket(ThreadPool<MsgWebsocket>::Thread& thr);
+    void runIngester(ThreadPool<MsgIngester>::Thread& thr);
+    void runWriter(ThreadPool<MsgWriter>::Thread& thr);
+    void runReqWorker(ThreadPool<MsgReqWorker>::Thread& thr);
+    void runReqMonitor(ThreadPool<MsgReqMonitor>::Thread& thr);
+    void runNegentropy(ThreadPool<MsgNegentropy>::Thread& thr);
     void runCron();
-
     void runSignalHandler();
 
-    // Utils (can be called by any thread)
+    void ingesterProcessEvent(
+        lmdb::txn& txn, 
+        uint64_t connId, 
+        flat_hash_map<uint64_t, AuthStatus*>& connIdToAuthStatus, 
+        std::string ipAddr, 
+        secp256k1_context* secpCtx, 
+        const tao::json::value& origJson, 
+        std::vector<MsgWriter>& output,
+        std::shared_ptr<std::promise<ProcessResult>> resultPromise = nullptr
+    );
+    
+    void ingesterProcessReq(lmdb::txn& txn, uint64_t connId, const tao::json::value& origJson);
+    void ingesterProcessClose(lmdb::txn& txn, uint64_t connId, const tao::json::value& origJson);
+    void ingesterProcessAuth(uint64_t connId, flat_hash_map<uint64_t, AuthStatus*> connIdToAuthStatus, secp256k1_context* secpCtx, const tao::json::value& eventJson);
+    void ingesterProcessNegentropy(lmdb::txn& txn, Decompressor& decomp, uint64_t connId, const tao::json::value& origJson);
 
-    void sendToConn(uint64_t connId, std::string &&payload)
-    {
+    void sendToConn(uint64_t connId, std::string&& payload) {
         tpWebsocket.dispatch(0, MsgWebsocket{MsgWebsocket::Send{connId, std::move(payload)}});
         hubTrigger->send();
     }
 
-    void sendToConnBinary(uint64_t connId, std::string &&payload)
-    {
+    void sendToConnBinary(uint64_t connId, std::string&& payload) {
         tpWebsocket.dispatch(0, MsgWebsocket{MsgWebsocket::SendBinary{connId, std::move(payload)}});
         hubTrigger->send();
     }
 
-    void sendEvent(uint64_t connId, const SubId &subId, std::string_view evJson)
-    {
+    void sendEvent(uint64_t connId, const SubId& subId, std::string_view evJson) {
         auto subIdSv = subId.sv();
-
         std::string reply;
         reply.reserve(13 + subIdSv.size() + evJson.size());
-
         reply += "[\"EVENT\",\"";
         reply += subIdSv;
         reply += "\",";
         reply += evJson;
         reply += "]";
-
         sendToConn(connId, std::move(reply));
     }
 
-    void sendEventToBatch(RecipientList &&list, std::string &&evJson)
-    {
+    void sendEventToBatch(RecipientList&& list, std::string&& evJson) {
         tpWebsocket.dispatch(0, MsgWebsocket{MsgWebsocket::SendEventToBatch{std::move(list), std::move(evJson)}});
         hubTrigger->send();
     }
 
-    void sendNoticeError(uint64_t connId, std::string &&payload)
-    {
+    void sendNoticeError(uint64_t connId, std::string&& payload) {
         LI << "sending error to [" << connId << "]: " << payload;
         auto reply = tao::json::value::array({"NOTICE", std::string("ERROR: ") + payload});
         tpWebsocket.dispatch(0, MsgWebsocket{MsgWebsocket::Send{connId, std::move(tao::json::to_string(reply))}});
         hubTrigger->send();
     }
 
-    void sendOKResponse(uint64_t connId, std::string_view eventIdHex, bool written, std::string_view message)
-    {
+    void sendOKResponse(uint64_t connId, std::string_view eventIdHex, bool written, std::string_view message) {
         auto reply = tao::json::value::array({"OK", eventIdHex, written, message});
         tpWebsocket.dispatch(0, MsgWebsocket{MsgWebsocket::Send{connId, std::move(tao::json::to_string(reply))}});
         hubTrigger->send();
     }
 
-    void sendAuthChallenge(uint64_t connId, std::string_view challenge)
-    {
+    void sendAuthChallenge(uint64_t connId, std::string_view challenge) {
         auto reply = tao::json::value::array({"AUTH", challenge});
         tpWebsocket.dispatch(0, MsgWebsocket{MsgWebsocket::Send{connId, std::move(tao::json::to_string(reply))}});
         hubTrigger->send();

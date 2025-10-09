@@ -46,7 +46,7 @@ void RelayServer::runIngester(ThreadPool<MsgIngester>::Thread &thr)
                                     secpCtx,
                                     arr[1],
                                     writerMsgs,
-                                    msg->resultPromise // Pass the promise through
+                                    msg->resultPromise
                                 );
                             }
                             catch (std::exception &e)
@@ -168,9 +168,8 @@ void RelayServer::ingesterProcessEvent(
     secp256k1_context *secpCtx, 
     const tao::json::value &origJson, 
     std::vector<MsgWriter> &output,
-    std::shared_ptr<std::promise<ProcessResult>> resultPromise  // NO DEFAULT HERE
+    std::shared_ptr<std::promise<ProcessResult>> resultPromise
 ) {
-
     std::string packedStr, jsonStr;
 
     try
@@ -192,8 +191,6 @@ void RelayServer::ingesterProcessEvent(
 
     PackedEventView packed(packedStr);
     std::string eventIdHex = to_hex(packed.id());
-
-    // WHITELIST CHECK
     std::string eventPubkeyHex = to_hex(packed.pubkey());
 
     const char *whitelistEnv = std::getenv("STRFRY_WHITELIST");
@@ -234,7 +231,6 @@ void RelayServer::ingesterProcessEvent(
         return;
     }
 
-    // Check for duplicate
     {
         auto existing = lookupEventById(txn, packed.id());
         if (existing)
@@ -252,7 +248,6 @@ void RelayServer::ingesterProcessEvent(
         }
     }
 
-    // Accept the event
     LI << "Accepting event from " << (connId == 0 ? "HTTP" : "WebSocket") << ": " << eventIdHex;
 
     if (resultPromise)
@@ -275,7 +270,6 @@ void RelayServer::ingesterProcessReq(lmdb::txn &txn, uint64_t connId, const tao:
         throw herr("arr too big");
 
     Subscription sub(connId, jsonGetString(arr[1], "REQ subscription id was not a string"), NostrFilterGroup(arr));
-
     tpReqWorker.dispatch(connId, MsgReqWorker{MsgReqWorker::NewSub{std::move(sub)}});
 }
 
@@ -344,9 +338,7 @@ void RelayServer::ingesterProcessAuth(uint64_t connId, flat_hash_map<uint64_t, A
         throw herr("incorrect or missing relay tag, expected: " + cfg().relay__serviceUrl);
     }
 
-    // set the connection as authenticated with this pubkey
     (*as->second).authed = packed.pubkey();
-
     sendOKResponse(connId, to_hex(packed.id()), true, "successfully authenticated");
 }
 
