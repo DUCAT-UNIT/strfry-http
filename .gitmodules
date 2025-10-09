@@ -4,3 +4,6 @@
 [submodule "external/negentropy"]
 	path = external/negentropy
 	url = https://github.com/hoytech/negentropy.git
+[submodule "deps/cpp-httplib"]
+	path = deps/cpp-httplib
+	url = https://github.com/yhirose/cpp-httplib.git

@@ -1,52 +1,61 @@
-# Built by Akito
-# npub1wprtv89px7z2ut04vvquscpmyfuzvcxttwy2csvla5lvwyj807qqz5aqle
-
-FROM alpine:3.18.3 AS build
-
-ENV TZ=Europe/London
+FROM debian:bookworm-slim AS build
 
 WORKDIR /build
 
-COPY . .
-
-RUN \
-  apk --no-cache add \
-    linux-headers \
+# Install dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
     git \
-    g++ \
-    make \
-    perl \
-    pkgconfig \
+    pkg-config \
+    cmake \
     libtool \
     ca-certificates \
-    libressl-dev \
-    zlib-dev \
-    lmdb-dev \
-    flatbuffers-dev \
+    liblmdb-dev \
+    libssl-dev \
+    zlib1g-dev \
     libsecp256k1-dev \
-    zstd-dev \
-  && rm -rf /var/cache/apk/* \
-  && git submodule update --init \
-  && make setup-golpe \
-  && make -j4
+    libzstd-dev \
+    nlohmann-json3-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-FROM alpine:3.18.3
+# Build FlatBuffers from source
+RUN git clone --branch v25.1.21 --depth 1 https://github.com/google/flatbuffers.git /tmp/flatbuffers \
+  && cd /tmp/flatbuffers \
+  && cmake -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release \
+  && make -j$(nproc) \
+  && make install \
+  && ldconfig \
+  && cd / \
+  && rm -rf /tmp/flatbuffers
+
+# Copy source
+COPY . .
+
+# Build - delete build dir to force schema regeneration
+RUN git submodule update --init \
+  && make setup-golpe \
+  && rm -rf build/ \
+  && cd golpe/external/uWebSockets && make -j && cd ../../.. \
+  && make -j2
+
+# Runtime stage
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y \
+    liblmdb0 \
+    libssl3 \
+    zlib1g \
+    libsecp256k1-1 \
+    libzstd1 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=build /build/strfry /usr/local/bin/
+COPY --from=build /usr/local/lib/libflatbuffers* /usr/local/lib/
+RUN ldconfig
 
 WORKDIR /app
 
-RUN \
-  apk --no-cache add \
-    lmdb \
-    flatbuffers \
-    libsecp256k1 \
-    libb2 \
-    zstd \
-    libressl \
-  && rm -rf /var/cache/apk/*
+EXPOSE 7777 8080
 
-COPY --from=build /build/strfry strfry
-
-EXPOSE 7777
-
-ENTRYPOINT ["/app/strfry"]
+ENTRYPOINT ["/usr/local/bin/strfry"]
 CMD ["relay"]

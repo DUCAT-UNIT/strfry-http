@@ -1,0 +1,354 @@
+clang++ -std=c++20 -O3 -g -Wall -fPIC  -DDOCOPT_HEADER_ONLY -Iinclude -Ibuild -Isrc -Igolpe/external -Igolpe/external/lmdbxx/include -Igolpe/external/config/include -Igolpe/external/json/include -Igolpe/external/PEGTL/include -Igolpe/external/hoytech-cpp -Igolpe/external/docopt.cpp -Igolpe/external/loguru -Igolpe/external/parallel-hashmap -Iexternal/negentropy/cpp -MMD -MP -MT src/events.o -MF src/events.d -c src/events.cpp -o src/events.o
+clang++ -std=c++20 -O3 -g -Wall -fPIC  -DDOCOPT_HEADER_ONLY -Iinclude -Ibuild -Isrc -Igolpe/external -Igolpe/external/lmdbxx/include -Igolpe/external/config/include -Igolpe/external/json/include -Igolpe/external/PEGTL/include -Igolpe/external/hoytech-cpp -Igolpe/external/docopt.cpp -Igolpe/external/loguru -Igolpe/external/parallel-hashmap -Iexternal/negentropy/cpp -MMD -MP -MT src/onAppStartup.o -MF src/onAppStartup.d -c src/onAppStartup.cpp -o src/onAppStartup.o
+clang++ -std=c++20 -O3 -g -Wall -fPIC  -DDOCOPT_HEADER_ONLY -Iinclude -Ibuild -Isrc -Igolpe/external -Igolpe/external/lmdbxx/include -Igolpe/external/config/include -Igolpe/external/json/include -Igolpe/external/PEGTL/include -Igolpe/external/hoytech-cpp -Igolpe/external/docopt.cpp -Igolpe/external/loguru -Igolpe/external/parallel-hashmap -Iexternal/negentropy/cpp -MMD -MP -MT src/apps/dbutils/cmd_compact.o -MF src/apps/dbutils/cmd_compact.d -c src/apps/dbutils/cmd_compact.cpp -o src/apps/dbutils/cmd_compact.o
+clang++ -std=c++20 -O3 -g -Wall -fPIC  -DDOCOPT_HEADER_ONLY -Iinclude -Ibuild -Isrc -Igolpe/external -Igolpe/external/lmdbxx/include -Igolpe/external/config/include -Igolpe/external/json/include -Igolpe/external/PEGTL/include -Igolpe/external/hoytech-cpp -Igolpe/external/docopt.cpp -Igolpe/external/loguru -Igolpe/external/parallel-hashmap -Iexternal/negentropy/cpp -MMD -MP -MT src/apps/dbutils/cmd_delete.o -MF src/apps/dbutils/cmd_delete.d -c src/apps/dbutils/cmd_delete.cpp -o src/apps/dbutils/cmd_delete.o
+In file included from src/onAppStartup.cpp:6:
+In file included from build/golpe.h:8:
+golpe/external/hoytech-cpp/hoytech/hex.h:35:63: warning: format specifies type 'unsigned long' but the argument has type 'uint64_t' (aka 'unsigned long long') [-Wformat]
+    snprintf(buf, sizeof(buf), "%s%lx", prefixed ? "0x" : "", input);
+                                  ~~~                         ^~~~~
+                                  %llx
+In file included from src/events.cpp:4:
+In file included from src/events.h:5:
+In file included from build/golpe.h:8:
+golpe/external/hoytech-cpp/hoytech/hex.h:35:63: warning: format specifies type 'unsigned long' but the argument has type 'uint64_t' (aka 'unsigned long long') [-Wformat]
+    snprintf(buf, sizeof(buf), "%s%lx", prefixed ? "0x" : "", input);
+                                  ~~~                         ^~~~~
+                                  %llx
+In file included from src/apps/dbutils/cmd_compact.cpp:5:
+In file included from build/golpe.h:8:
+golpe/external/hoytech-cpp/hoytech/hex.h:35:63: warning: format specifies type 'unsigned long' but the argument has type 'uint64_t' (aka 'unsigned long long') [-Wformat]
+    snprintf(buf, sizeof(buf), "%s%lx", prefixed ? "0x" : "", input);
+                                  ~~~                         ^~~~~
+                                  %llx
+In file included from src/apps/dbutils/cmd_delete.cpp:4:
+In file included from build/golpe.h:8:
+golpe/external/hoytech-cpp/hoytech/hex.h:35:63: warning: format specifies type 'unsigned long' but the argument has type 'uint64_t' (aka 'unsigned long long') [-Wformat]
+    snprintf(buf, sizeof(buf), "%s%lx", prefixed ? "0x" : "", input);
+                                  ~~~                         ^~~~~
+                                  %llx
+In file included from src/events.cpp:4:
+In file included from src/events.h:7:
+src/Bytes32.h:36:23: error: cannot initialize a variable of type 'uint64_t *' (aka 'unsigned long long *') with an rvalue of type 'size_t *' (aka 'unsigned long *')
+            uint64_t *p = (size_t*)&b.buf;
+                      ^   ~~~~~~~~~~~~~~~
+In file included from src/events.cpp:4:
+In file included from src/events.h:9:
+In file included from src/NegentropyFilterCache.h:9:
+src/filters.h:191:32: error: reference to local binding 'tag' declared in enclosing function 'NostrFilter::doesMatch'
+                if (tagName == tag && filt.doesMatch(tagVal)) {
+                               ^
+src/filters.h:187:27: note: 'tag' declared here
+        for (const auto &[tag, filt] : tags) {
+                          ^
+src/filters.h:191:39: error: reference to local binding 'filt' declared in enclosing function 'NostrFilter::doesMatch'
+                if (tagName == tag && filt.doesMatch(tagVal)) {
+                                      ^
+src/filters.h:187:32: note: 'filt' declared here
+        for (const auto &[tag, filt] : tags) {
+                               ^
+In file included from src/events.cpp:2:
+In file included from external/negentropy/cpp/negentropy.h:8:
+In file included from /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/string:534:
+In file included from /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__memory/allocate_at_least.h:13:
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__memory/allocator_traits.h:298:9: error: no matching function for call to 'construct_at'
+        _VSTD::construct_at(__p, _VSTD::forward<_Args>(__args)...);
+        ^~~~~~~~~~~~~~~~~~~
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__config:695:17: note: expanded from macro '_VSTD'
+#  define _VSTD std
+                ^
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/vector:808:21: note: in instantiation of function template specialization 'std::allocator_traits<std::allocator<NegentropyFilterCache::FilterInfo>>::construct<NegentropyFilterCache::FilterInfo, NostrFilter, unsigned long long &, void, void>' requested here
+    __alloc_traits::construct(this->__alloc(), _VSTD::__to_address(__tx.__pos_),
+                    ^
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/vector:1597:9: note: in instantiation of function template specialization 'std::vector<NegentropyFilterCache::FilterInfo>::__construct_one_at_end<NostrFilter, unsigned long long &>' requested here
+        __construct_one_at_end(_VSTD::forward<_Args>(__args)...);
+        ^
+src/NegentropyFilterCache.h:49:25: note: in instantiation of function template specialization 'std::vector<NegentropyFilterCache::FilterInfo>::emplace_back<NostrFilter, unsigned long long &>' requested here
+                filters.emplace_back(
+                        ^
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__functional/invoke.h:391:28: note: in instantiation of function template specialization 'NegentropyFilterCache::freshenCache(lmdb::txn &)::(anonymous class)::operator()<defaultDb::environment::View_NegentropyFilter>' requested here
+_LIBCPP_CONSTEXPR decltype(std::declval<_Fp>()(std::declval<_Args>()...))
+                           ^
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__functional/invoke.h:401:19: note: while substituting deduced template arguments into function template '__invoke' [with _Fp = (lambda at src/NegentropyFilterCache.h:48:47) &, _Args = <defaultDb::environment::View_NegentropyFilter &>]
+  static decltype(std::__invoke(declval<_XFp>(), declval<_XArgs>()...)) __try_call(int);
+                  ^
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__functional/invoke.h:407:28: note: (skipping 3 contexts in backtrace; use -ftemplate-backtrace-limit=0 to see all)
+  using _Result = decltype(__try_call<_Fp, _Args...>(0));
+                           ^
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__functional/function.h:980:33: note: in instantiation of template type alias '_And' requested here
+    template <class _Fp, bool = _And<
+                                ^
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__functional/function.h:999:54: note: in instantiation of default argument for '__callable<(lambda at src/NegentropyFilterCache.h:48:47) &>' required here
+  using _EnableIfLValueCallable = typename enable_if<__callable<_Fp&>::value>::type;
+                                                     ^~~~~~~~~~~~~~~~
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__functional/function.h:1010:33: note: in instantiation of template type alias '_EnableIfLValueCallable' requested here
+    template<class _Fp, class = _EnableIfLValueCallable<_Fp>>
+                                ^
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__functional/function.h:1011:5: note: in instantiation of default argument for 'function<(lambda at src/NegentropyFilterCache.h:48:47)>' required here
+    function(_Fp);
+    ^~~~~~~~~~~~~
+src/NegentropyFilterCache.h:48:47: note: while substituting deduced template arguments into function template 'function' [with _Fp = (lambda at src/NegentropyFilterCache.h:48:47), $1 = (no value)]
+            env.foreach_NegentropyFilter(txn, [&](auto &f){
+                                              ^
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__memory/construct_at.h:33:38: note: candidate template ignored: substitution failure [with _Tp = NegentropyFilterCache::FilterInfo, _Args = <NostrFilter, unsigned long long &>]: no matching constructor for initialization of 'NegentropyFilterCache::FilterInfo'
+_LIBCPP_HIDE_FROM_ABI constexpr _Tp* construct_at(_Tp* __location, _Args&&... __args) {
+                                     ^
+In file included from src/apps/dbutils/cmd_delete.cpp:6:
+In file included from src/DBQuery.h:5:
+In file included from src/Subscription.h:5:
+src/filters.h:191:32: error: reference to local binding 'tag' declared in enclosing function 'NostrFilter::doesMatch'
+                if (tagName == tag && filt.doesMatch(tagVal)) {
+                               ^
+src/filters.h:187:27: note: 'tag' declared here
+        for (const auto &[tag, filt] : tags) {
+                          ^
+src/filters.h:191:39: error: reference to local binding 'filt' declared in enclosing function 'NostrFilter::doesMatch'
+                if (tagName == tag && filt.doesMatch(tagVal)) {
+                                      ^
+src/filters.h:187:32: note: 'filt' declared here
+        for (const auto &[tag, filt] : tags) {
+                               ^
+In file included from src/apps/dbutils/cmd_delete.cpp:6:
+In file included from src/DBQuery.h:7:
+In file included from src/events.h:7:
+src/Bytes32.h:36:23: error: cannot initialize a variable of type 'uint64_t *' (aka 'unsigned long long *') with an rvalue of type 'size_t *' (aka 'unsigned long *')
+            uint64_t *p = (size_t*)&b.buf;
+                      ^   ~~~~~~~~~~~~~~~
+In file included from src/apps/dbutils/cmd_delete.cpp:1:
+In file included from /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/iostream:41:
+In file included from /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/ios:221:
+In file included from /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__locale:18:
+In file included from /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/memory:846:
+In file included from /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__memory/allocate_at_least.h:13:
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__memory/allocator_traits.h:298:9: error: no matching function for call to 'construct_at'
+        _VSTD::construct_at(__p, _VSTD::forward<_Args>(__args)...);
+        ^~~~~~~~~~~~~~~~~~~
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__config:695:17: note: expanded from macro '_VSTD'
+#  define _VSTD std
+                ^
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/vector:808:21: note: in instantiation of function template specialization 'std::allocator_traits<std::allocator<NegentropyFilterCache::FilterInfo>>::construct<NegentropyFilterCache::FilterInfo, NostrFilter, unsigned long long &, void, void>' requested here
+    __alloc_traits::construct(this->__alloc(), _VSTD::__to_address(__tx.__pos_),
+                    ^
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/vector:1597:9: note: in instantiation of function template specialization 'std::vector<NegentropyFilterCache::FilterInfo>::__construct_one_at_end<NostrFilter, unsigned long long &>' requested here
+        __construct_one_at_end(_VSTD::forward<_Args>(__args)...);
+        ^
+src/NegentropyFilterCache.h:49:25: note: in instantiation of function template specialization 'std::vector<NegentropyFilterCache::FilterInfo>::emplace_back<NostrFilter, unsigned long long &>' requested here
+                filters.emplace_back(
+                        ^
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__functional/invoke.h:391:28: note: in instantiation of function template specialization 'NegentropyFilterCache::freshenCache(lmdb::txn &)::(anonymous class)::operator()<defaultDb::environment::View_NegentropyFilter>' requested here
+_LIBCPP_CONSTEXPR decltype(std::declval<_Fp>()(std::declval<_Args>()...))
+                           ^
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__functional/invoke.h:401:19: note: while substituting deduced template arguments into function template '__invoke' [with _Fp = (lambda at src/NegentropyFilterCache.h:48:47) &, _Args = <defaultDb::environment::View_NegentropyFilter &>]
+  static decltype(std::__invoke(declval<_XFp>(), declval<_XArgs>()...)) __try_call(int);
+                  ^
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__functional/invoke.h:407:28: note: (skipping 3 contexts in backtrace; use -ftemplate-backtrace-limit=0 to see all)
+  using _Result = decltype(__try_call<_Fp, _Args...>(0));
+                           ^
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__functional/function.h:980:33: note: in instantiation of template type alias '_And' requested here
+    template <class _Fp, bool = _And<
+                                ^
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__functional/function.h:999:54: note: in instantiation of default argument for '__callable<(lambda at src/NegentropyFilterCache.h:48:47) &>' required here
+  using _EnableIfLValueCallable = typename enable_if<__callable<_Fp&>::value>::type;
+                                                     ^~~~~~~~~~~~~~~~
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__functional/function.h:1010:33: note: in instantiation of template type alias '_EnableIfLValueCallable' requested here
+    template<class _Fp, class = _EnableIfLValueCallable<_Fp>>
+                                ^
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__functional/function.h:1011:5: note: in instantiation of default argument for 'function<(lambda at src/NegentropyFilterCache.h:48:47)>' required here
+    function(_Fp);
+    ^~~~~~~~~~~~~
+src/NegentropyFilterCache.h:48:47: note: while substituting deduced template arguments into function template 'function' [with _Fp = (lambda at src/NegentropyFilterCache.h:48:47), $1 = (no value)]
+            env.foreach_NegentropyFilter(txn, [&](auto &f){
+                                              ^
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__memory/construct_at.h:33:38: note: candidate template ignored: substitution failure [with _Tp = NegentropyFilterCache::FilterInfo, _Args = <NostrFilter, unsigned long long &>]: no matching constructor for initialization of 'NegentropyFilterCache::FilterInfo'
+_LIBCPP_HIDE_FROM_ABI constexpr _Tp* construct_at(_Tp* __location, _Args&&... __args) {
+                                     ^
+In file included from src/apps/dbutils/cmd_delete.cpp:1:
+In file included from /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/iostream:41:
+In file included from /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/ios:221:
+In file included from /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__locale:18:
+In file included from /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/memory:846:
+In file included from /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__memory/allocate_at_least.h:13:
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__memory/allocator_traits.h:298:9: error: no matching function for call to 'construct_at'
+        _VSTD::construct_at(__p, _VSTD::forward<_Args>(__args)...);
+        ^~~~~~~~~~~~~~~~~~~
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__config:695:17: note: expanded from macro '_VSTD'
+#  define _VSTD std
+                ^
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/vector:808:21: note: in instantiation of function template specialization 'std::allocator_traits<std::allocator<DBScan::ScanCursor>>::construct<DBScan::ScanCursor, std::string, const unsigned long long &, (lambda at src/DBQuery.h:118:21), void, void>' requested here
+    __alloc_traits::construct(this->__alloc(), _VSTD::__to_address(__tx.__pos_),
+                    ^
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/vector:1597:9: note: in instantiation of function template specialization 'std::vector<DBScan::ScanCursor>::__construct_one_at_end<std::string, const unsigned long long &, (lambda at src/DBQuery.h:118:21)>' requested here
+        __construct_one_at_end(_VSTD::forward<_Args>(__args)...);
+        ^
+src/DBQuery.h:115:25: note: in instantiation of function template specialization 'std::vector<DBScan::ScanCursor>::emplace_back<std::string, const unsigned long long &, (lambda at src/DBQuery.h:118:21)>' requested here
+                cursors.emplace_back(
+                        ^
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__memory/construct_at.h:33:38: note: candidate template ignored: substitution failure [with _Tp = DBScan::ScanCursor, _Args = <std::string, const unsigned long long &, (lambda at src/DBQuery.h:118:21)>]: no matching constructor for initialization of 'DBScan::ScanCursor'
+_LIBCPP_HIDE_FROM_ABI constexpr _Tp* construct_at(_Tp* __location, _Args&&... __args) {
+                                     ^
+In file included from src/apps/dbutils/cmd_delete.cpp:1:
+In file included from /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/iostream:41:
+In file included from /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/ios:221:
+In file included from /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__locale:18:
+In file included from /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/memory:846:
+In file included from /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__memory/allocate_at_least.h:13:
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__memory/allocator_traits.h:298:9: error: no matching function for call to 'construct_at'
+        _VSTD::construct_at(__p, _VSTD::forward<_Args>(__args)...);
+        ^~~~~~~~~~~~~~~~~~~
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__config:695:17: note: expanded from macro '_VSTD'
+#  define _VSTD std
+                ^
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/vector:808:21: note: in instantiation of function template specialization 'std::allocator_traits<std::allocator<DBScan::ScanCursor>>::construct<DBScan::ScanCursor, std::string, const unsigned long long &, (lambda at src/DBQuery.h:149:21), void, void>' requested here
+    __alloc_traits::construct(this->__alloc(), _VSTD::__to_address(__tx.__pos_),
+                    ^
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/vector:1597:9: note: in instantiation of function template specialization 'std::vector<DBScan::ScanCursor>::__construct_one_at_end<std::string, const unsigned long long &, (lambda at src/DBQuery.h:149:21)>' requested here
+        __construct_one_at_end(_VSTD::forward<_Args>(__args)...);
+        ^
+src/DBQuery.h:146:25: note: in instantiation of function template specialization 'std::vector<DBScan::ScanCursor>::emplace_back<std::string, const unsigned long long &, (lambda at src/DBQuery.h:149:21)>' requested here
+                cursors.emplace_back(
+                        ^
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__memory/construct_at.h:33:38: note: candidate template ignored: substitution failure [with _Tp = DBScan::ScanCursor, _Args = <std::string, const unsigned long long &, (lambda at src/DBQuery.h:149:21)>]: no matching constructor for initialization of 'DBScan::ScanCursor'
+_LIBCPP_HIDE_FROM_ABI constexpr _Tp* construct_at(_Tp* __location, _Args&&... __args) {
+                                     ^
+In file included from src/apps/dbutils/cmd_delete.cpp:6:
+src/DBQuery.h:169:34: warning: lambda capture 'kind' is not used [-Wunused-lambda-capture]
+                        [search, kind](std::string_view k){
+                               ~~^~~~
+In file included from src/apps/dbutils/cmd_delete.cpp:1:
+In file included from /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/iostream:41:
+In file included from /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/ios:221:
+In file included from /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__locale:18:
+In file included from /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/memory:846:
+In file included from /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__memory/allocate_at_least.h:13:
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__memory/allocator_traits.h:298:9: error: no matching function for call to 'construct_at'
+        _VSTD::construct_at(__p, _VSTD::forward<_Args>(__args)...);
+        ^~~~~~~~~~~~~~~~~~~
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__config:695:17: note: expanded from macro '_VSTD'
+#  define _VSTD std
+                ^
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/vector:808:21: note: in instantiation of function template specialization 'std::allocator_traits<std::allocator<DBScan::ScanCursor>>::construct<DBScan::ScanCursor, std::string, const unsigned long long &, (lambda at src/DBQuery.h:169:25), void, void>' requested here
+    __alloc_traits::construct(this->__alloc(), _VSTD::__to_address(__tx.__pos_),
+                    ^
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/vector:1597:9: note: in instantiation of function template specialization 'std::vector<DBScan::ScanCursor>::__construct_one_at_end<std::string, const unsigned long long &, (lambda at src/DBQuery.h:169:25)>' requested here
+        __construct_one_at_end(_VSTD::forward<_Args>(__args)...);
+        ^
+src/DBQuery.h:166:29: note: in instantiation of function template specialization 'std::vector<DBScan::ScanCursor>::emplace_back<std::string, const unsigned long long &, (lambda at src/DBQuery.h:169:25)>' requested here
+                    cursors.emplace_back(
+                            ^
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__memory/construct_at.h:33:38: note: candidate template ignored: substitution failure [with _Tp = DBScan::ScanCursor, _Args = <std::string, const unsigned long long &, (lambda at src/DBQuery.h:169:25)>]: no matching constructor for initialization of 'DBScan::ScanCursor'
+_LIBCPP_HIDE_FROM_ABI constexpr _Tp* construct_at(_Tp* __location, _Args&&... __args) {
+                                     ^
+In file included from src/apps/dbutils/cmd_delete.cpp:1:
+In file included from /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/iostream:41:
+In file included from /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/ios:221:
+In file included from /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__locale:18:
+In file included from /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/memory:846:
+In file included from /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__memory/allocate_at_least.h:13:
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__memory/allocator_traits.h:298:9: error: no matching function for call to 'construct_at'
+        _VSTD::construct_at(__p, _VSTD::forward<_Args>(__args)...);
+        ^~~~~~~~~~~~~~~~~~~
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__config:695:17: note: expanded from macro '_VSTD'
+#  define _VSTD std
+                ^
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/vector:808:21: note: in instantiation of function template specialization 'std::allocator_traits<std::allocator<DBScan::ScanCursor>>::construct<DBScan::ScanCursor, std::string, const unsigned long long &, (lambda at src/DBQuery.h:189:21), void, void>' requested here
+    __alloc_traits::construct(this->__alloc(), _VSTD::__to_address(__tx.__pos_),
+                    ^
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/vector:1597:9: note: in instantiation of function template specialization 'std::vector<DBScan::ScanCursor>::__construct_one_at_end<std::string, const unsigned long long &, (lambda at src/DBQuery.h:189:21)>' requested here
+        __construct_one_at_end(_VSTD::forward<_Args>(__args)...);
+        ^
+src/DBQuery.h:186:25: note: in instantiation of function template specialization 'std::vector<DBScan::ScanCursor>::emplace_back<std::string, const unsigned long long &, (lambda at src/DBQuery.h:189:21)>' requested here
+                cursors.emplace_back(
+                        ^
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__memory/construct_at.h:33:38: note: candidate template ignored: substitution failure [with _Tp = DBScan::ScanCursor, _Args = <std::string, const unsigned long long &, (lambda at src/DBQuery.h:189:21)>]: no matching constructor for initialization of 'DBScan::ScanCursor'
+_LIBCPP_HIDE_FROM_ABI constexpr _Tp* construct_at(_Tp* __location, _Args&&... __args) {
+                                     ^
+In file included from src/apps/dbutils/cmd_delete.cpp:1:
+In file included from /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/iostream:41:
+In file included from /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/ios:221:
+In file included from /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__locale:18:
+In file included from /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/memory:846:
+In file included from /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__memory/allocate_at_least.h:13:
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__memory/allocator_traits.h:298:9: error: no matching function for call to 'construct_at'
+        _VSTD::construct_at(__p, _VSTD::forward<_Args>(__args)...);
+        ^~~~~~~~~~~~~~~~~~~
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__config:695:17: note: expanded from macro '_VSTD'
+#  define _VSTD std
+                ^
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/vector:808:21: note: in instantiation of function template specialization 'std::allocator_traits<std::allocator<DBScan::ScanCursor>>::construct<DBScan::ScanCursor, std::string, const unsigned long long &, (lambda at src/DBQuery.h:205:21), void, void>' requested here
+    __alloc_traits::construct(this->__alloc(), _VSTD::__to_address(__tx.__pos_),
+                    ^
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/vector:1597:9: note: in instantiation of function template specialization 'std::vector<DBScan::ScanCursor>::__construct_one_at_end<std::string, const unsigned long long &, (lambda at src/DBQuery.h:205:21)>' requested here
+        __construct_one_at_end(_VSTD::forward<_Args>(__args)...);
+        ^
+src/DBQuery.h:202:25: note: in instantiation of function template specialization 'std::vector<DBScan::ScanCursor>::emplace_back<std::string, const unsigned long long &, (lambda at src/DBQuery.h:205:21)>' requested here
+                cursors.emplace_back(
+                        ^
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__memory/construct_at.h:33:38: note: candidate template ignored: substitution failure [with _Tp = DBScan::ScanCursor, _Args = <std::string, const unsigned long long &, (lambda at src/DBQuery.h:205:21)>]: no matching constructor for initialization of 'DBScan::ScanCursor'
+_LIBCPP_HIDE_FROM_ABI constexpr _Tp* construct_at(_Tp* __location, _Args&&... __args) {
+                                     ^
+In file included from src/apps/dbutils/cmd_delete.cpp:1:
+In file included from /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/iostream:41:
+In file included from /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/ios:221:
+In file included from /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__locale:18:
+In file included from /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/memory:846:
+In file included from /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__memory/allocate_at_least.h:13:
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__memory/allocator_traits.h:298:9: error: no matching function for call to 'construct_at'
+        _VSTD::construct_at(__p, _VSTD::forward<_Args>(__args)...);
+        ^~~~~~~~~~~~~~~~~~~
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__config:695:17: note: expanded from macro '_VSTD'
+#  define _VSTD std
+                ^
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/vector:808:21: note: in instantiation of function template specialization 'std::allocator_traits<std::allocator<DBScan::ScanCursor>>::construct<DBScan::ScanCursor, std::string, const unsigned long long &, (lambda at src/DBQuery.h:219:17), void, void>' requested here
+    __alloc_traits::construct(this->__alloc(), _VSTD::__to_address(__tx.__pos_),
+                    ^
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/vector:1597:9: note: in instantiation of function template specialization 'std::vector<DBScan::ScanCursor>::__construct_one_at_end<std::string, const unsigned long long &, (lambda at src/DBQuery.h:219:17)>' requested here
+        __construct_one_at_end(_VSTD::forward<_Args>(__args)...);
+        ^
+src/DBQuery.h:216:21: note: in instantiation of function template specialization 'std::vector<DBScan::ScanCursor>::emplace_back<std::string, const unsigned long long &, (lambda at src/DBQuery.h:219:17)>' requested here
+            cursors.emplace_back(
+                    ^
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__memory/construct_at.h:33:38: note: candidate template ignored: substitution failure [with _Tp = DBScan::ScanCursor, _Args = <std::string, const unsigned long long &, (lambda at src/DBQuery.h:219:17)>]: no matching constructor for initialization of 'DBScan::ScanCursor'
+_LIBCPP_HIDE_FROM_ABI constexpr _Tp* construct_at(_Tp* __location, _Args&&... __args) {
+                                     ^
+In file included from src/events.cpp:2:
+In file included from external/negentropy/cpp/negentropy.h:8:
+In file included from /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/string:549:
+In file included from /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/memory:860:
+In file included from /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__memory/shared_ptr.h:28:
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__memory/unique_ptr.h:48:5: warning: delete called on non-final 'negentropy::storage::BTreeLMDB' that has virtual functions but non-virtual destructor [-Wdelete-non-abstract-non-virtual-dtor]
+    delete __ptr;
+    ^
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__memory/unique_ptr.h:305:7: note: in instantiation of member function 'std::default_delete<negentropy::storage::BTreeLMDB>::operator()' requested here
+      __ptr_.second()(__tmp);
+      ^
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__memory/unique_ptr.h:259:19: note: in instantiation of member function 'std::unique_ptr<negentropy::storage::BTreeLMDB>::reset' requested here
+  ~unique_ptr() { reset(); }
+                  ^
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__memory/construct_at.h:63:13: note: in instantiation of member function 'std::unique_ptr<negentropy::storage::BTreeLMDB>::~unique_ptr' requested here
+    __loc->~_Tp();
+            ^
+2 warnings and 4 errors generated.
+make: *** [src/events.o] Error 1
+make: *** Waiting for unfinished jobs....
+1 warning generated.
+In file included from src/apps/dbutils/cmd_delete.cpp:1:
+In file included from /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/iostream:41:
+In file included from /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/ios:221:
+In file included from /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__locale:18:
+In file included from /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/memory:860:
+In file included from /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__memory/shared_ptr.h:28:
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__memory/unique_ptr.h:48:5: warning: delete called on non-final 'negentropy::storage::BTreeLMDB' that has virtual functions but non-virtual destructor [-Wdelete-non-abstract-non-virtual-dtor]
+    delete __ptr;
+    ^
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__memory/unique_ptr.h:305:7: note: in instantiation of member function 'std::default_delete<negentropy::storage::BTreeLMDB>::operator()' requested here
+      __ptr_.second()(__tmp);
+      ^
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__memory/unique_ptr.h:259:19: note: in instantiation of member function 'std::unique_ptr<negentropy::storage::BTreeLMDB>::reset' requested here
+  ~unique_ptr() { reset(); }
+                  ^
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__memory/construct_at.h:63:13: note: in instantiation of member function 'std::unique_ptr<negentropy::storage::BTreeLMDB>::~unique_ptr' requested here
+    __loc->~_Tp();
+            ^
+3 warnings and 10 errors generated.
+make: *** [src/apps/dbutils/cmd_delete.o] Error 1
+1 warning generated.

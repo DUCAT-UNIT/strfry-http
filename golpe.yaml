@@ -131,3 +131,16 @@ config:
   - name: events__maxTagValSize
     desc: "Maximum size for tag values, in bytes"
     default: 1024
+  - name: relay__http__enabled
+    desc: "Enable HTTP API for event writes"
+    default: false
+  - name: relay__http__port
+    desc: "Port for HTTP API server"
+    default: 8080
+  - name: relay__http__bind
+    desc: "Bind address for HTTP server (127.0.0.1 for local, 0.0.0.0 for all)"
+    default: "127.0.0.1"
+  - name: relay__http__cors
+    desc: "Enable CORS headers for web applications"
+    default: true
+
