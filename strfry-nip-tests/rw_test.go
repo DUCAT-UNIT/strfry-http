@@ -132,7 +132,7 @@ done:
 	}
 }
 
-const httpURL = "http://127.0.0.1:8080/api/event"
+const httpURL = "http://127.0.0.1:8080/api/quotes"
 
 func TestHTTPEventPost(t *testing.T) {
 	// Create threshold event with whitelisted key
