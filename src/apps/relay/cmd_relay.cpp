@@ -35,13 +35,17 @@ void cmd_relay(const std::vector<std::string>& subArgs)
 void RelayServer::run()
 {
     {
+        // Block signals so they can be handled by the signal handler thread
         sigset_t set;
         sigemptyset(&set);
         sigaddset(&set, SIGUSR1);
+        sigaddset(&set, SIGTERM);
+        sigaddset(&set, SIGINT);
         int s = pthread_sigmask(SIG_BLOCK, &set, NULL);
         if (s != 0) {
             throw herr("Unable to set sigmask: ", strerror(errno));
         }
+        LI << "Signal handling initialized (SIGTERM, SIGINT, SIGUSR1)";
     }
 
     tpWebsocket.init("Websocket", 1, [this](auto& thr) {
@@ -152,7 +156,7 @@ void RelayServer::runHttpServer()
                 resultPromise
             }});
             
-            if (resultFuture.wait_for(std::chrono::seconds(5)) == std::future_status::timeout) {
+            if (resultFuture.wait_for(std::chrono::seconds(cfg().relay__http__timeout)) == std::future_status::timeout) {
                 errorMsg = "Event processing timeout";
                 LE << "HTTP event processing timeout: " << eventId;
                 return false;
