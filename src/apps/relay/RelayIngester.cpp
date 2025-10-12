@@ -193,42 +193,62 @@ void RelayServer::ingesterProcessEvent(
     std::string eventIdHex = to_hex(packed.id());
     std::string eventPubkeyHex = to_hex(packed.pubkey());
 
-    const char *whitelistEnv = std::getenv("STRFRY_WHITELIST");
-    std::string whitelistConfig = whitelistEnv ? whitelistEnv : "";
-
-    if (whitelistConfig.empty())
+    // Check whitelist if enabled
+    if (cfg().relay__whitelist__enabled)
     {
-        whitelistConfig = "6b5008a293291c14effeb0e8b7c56a80ecb5ca7b801768e17ec93092be6c0621";
-    }
+        std::string whitelistConfig = cfg().relay__whitelist__pubkeys;
 
-    bool isWhitelisted = false;
-    std::istringstream stream(whitelistConfig);
-    std::string allowedPubkey;
-
-    while (std::getline(stream, allowedPubkey, ','))
-    {
-        allowedPubkey.erase(0, allowedPubkey.find_first_not_of(" \t\r\n"));
-        allowedPubkey.erase(allowedPubkey.find_last_not_of(" \t\r\n") + 1);
-
-        if (eventPubkeyHex == allowedPubkey)
+        // Also check environment variable for backward compatibility
+        const char *whitelistEnv = std::getenv("STRFRY_WHITELIST");
+        if (whitelistEnv && strlen(whitelistEnv) > 0)
         {
-            isWhitelisted = true;
-            break;
+            whitelistConfig = whitelistEnv;
         }
-    }
 
-    if (!isWhitelisted)
-    {
-        LI << "Blocked non-whitelisted pubkey: " << eventPubkeyHex;
-        if (resultPromise)
+        if (whitelistConfig.empty())
         {
-            resultPromise->set_value({false, "blocked: pubkey not in whitelist", eventIdHex});
+            LW << "Whitelist is enabled but no pubkeys configured - rejecting all events";
+            if (resultPromise)
+            {
+                resultPromise->set_value({false, "blocked: whitelist enabled but empty", eventIdHex});
+            }
+            else if (connId != 0)
+            {
+                sendOKResponse(connId, eventIdHex, false, "blocked: whitelist enabled but empty");
+            }
+            return;
         }
-        else if (connId != 0)
+
+        bool isWhitelisted = false;
+        std::istringstream stream(whitelistConfig);
+        std::string allowedPubkey;
+
+        while (std::getline(stream, allowedPubkey, ','))
         {
-            sendOKResponse(connId, eventIdHex, false, "blocked: pubkey not in whitelist");
+            // Trim whitespace
+            allowedPubkey.erase(0, allowedPubkey.find_first_not_of(" \t\r\n"));
+            allowedPubkey.erase(allowedPubkey.find_last_not_of(" \t\r\n") + 1);
+
+            if (eventPubkeyHex == allowedPubkey)
+            {
+                isWhitelisted = true;
+                break;
+            }
         }
-        return;
+
+        if (!isWhitelisted)
+        {
+            LI << "Blocked non-whitelisted pubkey: " << eventPubkeyHex;
+            if (resultPromise)
+            {
+                resultPromise->set_value({false, "blocked: pubkey not in whitelist", eventIdHex});
+            }
+            else if (connId != 0)
+            {
+                sendOKResponse(connId, eventIdHex, false, "blocked: pubkey not in whitelist");
+            }
+            return;
+        }
     }
 
     {

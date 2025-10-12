@@ -13,11 +13,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const relayURL = "ws://localhost:7777"
-
-// Use the whitelisted key for all tests
-const whitelistedSk = "8ce73a2db5cbaf4b0ab3cabece9408e3b898c64474c0dbe27826c65d1180370e"
-
 // ThresholdData represents the data stored in event content
 type ThresholdData struct {
 	Origin      string  `json:"origin"`
