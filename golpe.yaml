@@ -143,4 +143,33 @@ config:
   - name: relay__http__cors
     desc: "Enable CORS headers for web applications"
     default: true
+  - name: relay__http__timeout
+    desc: "Timeout for HTTP event processing in seconds"
+    default: 5
+
+  - name: relay__whitelist__enabled
+    desc: "Enable pubkey whitelist for event submission"
+    default: false
+  - name: relay__whitelist__pubkeys
+    desc: "Comma-separated list of whitelisted pubkeys (hex format)"
+    default: ""
+
+  - name: relay__ratelimit__enabled
+    desc: "Enable rate limiting for HTTP requests"
+    default: true
+  - name: relay__ratelimit__perIpPerMinute
+    desc: "Maximum requests per IP address per minute (0 = unlimited)"
+    default: 60
+  - name: relay__ratelimit__perPubkeyPerMinute
+    desc: "Maximum requests per pubkey per minute (0 = unlimited)"
+    default: 100
+  - name: relay__ratelimit__globalPerMinute
+    desc: "Global maximum requests per minute (0 = unlimited)"
+    default: 1000
+  - name: relay__ratelimit__burstMultiplier
+    desc: "Burst capacity multiplier (e.g., 2.0 = allow 2x burst)"
+    default: 2.0
+  - name: relay__ratelimit__cleanupIntervalSeconds
+    desc: "How often to clean up old rate limit entries (seconds)"
+    default: 60
 
