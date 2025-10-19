@@ -34,55 +34,92 @@ strfry-nip-tests/
 ## Prerequisites
 
 ```bash
-# Install Go dependencies
+# Install Go dependencies (from strfry-nip-tests directory)
 go mod tidy
 
-# Ensure strfry server is running
-docker run -d -p 7777:7777 -p 8080:8080 \
-  -v $(pwd)/strfry-db:/app/strfry-db \
-  -v $(pwd)/strfry.conf:/app/strfry.conf \
-  strfry-http:latest relay
+# Ensure Docker and Docker Compose are installed
+docker --version
+docker-compose --version
 ```
 
-## Running Tests
+## Quick Start
 
-### Run All Tests
+### First Time Setup
 ```bash
-go test -v
+# From the strfry root directory
+cd /path/to/strfry
+
+# Build and start the relay (first time only)
+make test-setup
 ```
 
-### Run Specific Test Files
+### Running Tests
+
+**The Makefile automatically restarts the relay with fresh rate limit buckets before each test run!**
+
 ```bash
-# HTTP API tests only
-go test -v -run TestHTTP
+# From the strfry root directory
+cd /path/to/strfry
 
-# Query filter tests only
-go test -v -run TestQuery
+# Run all tests (recommended)
+make test
 
-# Security tests only
-go test -v -run TestSecurity
+# Run tests with verbose output
+make test-verbose
 
-# Load tests only
-go test -v -run TestLoad
+# Run quick tests only (skip load tests)
+make test-short
 ```
 
 ### Run Tests by Category
 ```bash
-# Quick tests (excludes load tests)
-go test -v -short
+# Security tests
+make test-security
 
-# Individual test
-go test -v -run TestHTTPPostEventSuccess
+# Rate limit tests
+make test-ratelimit
 
-# Pattern matching
-go test -v -run "TestQuery.*"
+# Query tests
+make test-query
+
+# Load tests
+make test-load
 ```
 
-### Run with Coverage
+### Other Commands
 ```bash
-# Generate coverage report
-go test -v -coverprofile=coverage.out
-go tool cover -html=coverage.out
+# Docker management
+make docker-build    # Build Docker image
+make docker-up       # Start relay
+make docker-down     # Stop relay
+make docker-restart  # Restart with fresh state
+make docker-logs     # View logs
+
+# Testing
+make test-coverage   # Generate coverage report
+make test-clean      # Clean test artifacts
+
+# Show all available commands
+make help-test
+```
+
+### Manual Test Execution (Advanced)
+```bash
+# If you want to run tests manually without the Makefile:
+
+# 1. Start relay with docker-compose
+cd .. && docker-compose up -d
+
+# 2. Wait for it to be ready
+sleep 5
+
+# 3. Run tests
+cd strfry-nip-tests
+go test -v -timeout 5m
+
+# Run specific tests
+go test -v -run TestQuery
+go test -v -run TestSecurity
 ```
 
 ## Test Categories

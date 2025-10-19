@@ -118,6 +118,10 @@ void HttpServer::setupRoutes()
         handleEventPost(req, res);
     });
 
+    server->Get("/api/quotes", [this](const httplib::Request& req, httplib::Response& res) {
+        handleGetQuoteByDTag(req, res);
+    });
+
     server->Get(R"(/api/quotes/([0-9a-fA-F]+))", [this](const httplib::Request& req, httplib::Response& res) {
         handleGetQuote(req, res);
     });
@@ -283,6 +287,99 @@ void HttpServer::handleGetQuote(const httplib::Request& req, httplib::Response& 
             {"error", std::string("Query error: ") + e.what()}
         }).dump(), "application/json");
         metrics->incrementRequestTotal("GET", 500);
+    }
+}
+
+void HttpServer::handleGetQuoteByDTag(const httplib::Request& req, httplib::Response& res)
+{
+    std::string reqId = res.get_header_value("X-Request-ID");
+    uint64_t startMs = RequestLogger::getTimestampMs();
+
+    try {
+        // Get the 'd' query parameter
+        auto dTag = req.get_param_value("d");
+
+        if (dTag.empty()) {
+            res.status = 400;
+            res.set_content(json({{"error", "Missing 'd' query parameter"}}).dump(), "application/json");
+            metrics->incrementRequestTotal("GET", 400);
+            logResponse(reqId, 400, RequestLogger::getTimestampMs() - startMs);
+            return;
+        }
+
+        LI << "[" << reqId << "] Fetching event by d tag from relay"
+           << " url=\"http://localhost:" << port << "/api/quotes?d=" << dTag << "\""
+           << " dTag=" << dTag;
+
+        // Build a Nostr filter for the 'd' tag
+        // Filter format: {"#d": ["<dTag>"], "limit": 1}
+        std::string filterStr = R"({"#d":[")" + dTag + R"("],"limit":1})";
+        tao::json::value filterJson;
+        try {
+            filterJson = tao::json::from_string(filterStr);
+        } catch (const std::exception& e) {
+            LE << "[" << reqId << "] Failed to parse filter JSON: " << e.what();
+            res.status = 500;
+            res.set_content(json({
+                {"error", std::string("Failed to build filter: ") + e.what()}
+            }).dump(), "application/json");
+            metrics->incrementRequestTotal("GET", 500);
+            logResponse(reqId, 500, RequestLogger::getTimestampMs() - startMs);
+            return;
+        }
+
+        // Query the database
+        auto txn = lmdb::txn::begin(env, nullptr, MDB_RDONLY);
+        Decompressor decomp;
+        std::string eventJsonStr;
+        bool found = false;
+
+        try {
+            foreachByFilter(txn, filterJson, [&](uint64_t levId) {
+                if (!found) {
+                    eventJsonStr = getEventJson(txn, decomp, levId);
+                    found = true;
+                }
+            });
+        } catch (const std::exception& e) {
+            txn.abort();
+            LE << "[" << reqId << "] Filter error: " << e.what();
+            res.status = 500;
+            res.set_content(json({
+                {"error", std::string("Filter error: ") + e.what()}
+            }).dump(), "application/json");
+            metrics->incrementRequestTotal("GET", 500);
+            logResponse(reqId, 500, RequestLogger::getTimestampMs() - startMs);
+            return;
+        }
+
+        txn.commit();
+
+        if (!found) {
+            LI << "[" << reqId << "] Event not found for d tag: " << dTag;
+            res.status = 404;
+            res.set_content(json({
+                {"error", "event not found for d tag: " + dTag}
+            }).dump(), "application/json");
+            metrics->incrementRequestTotal("GET", 404);
+            logResponse(reqId, 404, RequestLogger::getTimestampMs() - startMs);
+            return;
+        }
+
+        LI << "[" << reqId << "] Returning event for d tag: " << dTag;
+        res.status = 200;
+        res.set_content(eventJsonStr, "application/json");
+        metrics->incrementRequestTotal("GET", 200);
+        logResponse(reqId, 200, RequestLogger::getTimestampMs() - startMs);
+
+    } catch (const std::exception& e) {
+        LE << "[" << reqId << "] Query error: " << e.what();
+        res.status = 500;
+        res.set_content(json({
+            {"error", std::string("Query error: ") + e.what()}
+        }).dump(), "application/json");
+        metrics->incrementRequestTotal("GET", 500);
+        logResponse(reqId, 500, RequestLogger::getTimestampMs() - startMs);
     }
 }
 

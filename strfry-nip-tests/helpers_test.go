@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os/exec"
 	"testing"
 	"time"
 
@@ -33,6 +34,55 @@ func NewTestHelper(t *testing.T) *TestHelper {
 		t:      t,
 		client: &http.Client{Timeout: 10 * time.Second},
 	}
+}
+
+// ResetRateLimitBuckets restarts the server to reset rate limit buckets
+func (h *TestHelper) ResetRateLimitBuckets() {
+	h.t.Helper()
+	h.t.Log("🔄 Resetting rate limit buckets by restarting server...")
+
+	// Find strfry container (using docker-compose container name)
+	containerName := "strfry-relay"
+	cmd := exec.Command("docker", "ps", "-q", "--filter", "name="+containerName)
+	output, err := cmd.Output()
+	if err != nil {
+		h.t.Logf("⚠️  Could not find container (docker ps failed): %v", err)
+		h.t.Log("    Skipping bucket reset - tests may fail due to depleted buckets")
+		return
+	}
+
+	containerID := string(bytes.TrimSpace(output))
+	if containerID == "" {
+		h.t.Logf("⚠️  No strfry container found (looking for: %s)", containerName)
+		h.t.Log("    Run 'make setup' or 'docker-compose up -d' to start the relay")
+		h.t.Log("    Skipping bucket reset - tests may fail due to depleted buckets")
+		return
+	}
+
+	// Restart the container
+	cmd = exec.Command("docker", "restart", containerID)
+	if err := cmd.Run(); err != nil {
+		h.t.Logf("⚠️  Failed to restart container: %v", err)
+		return
+	}
+
+	h.t.Log("⏳ Waiting 3 seconds for server to start...")
+	time.Sleep(3 * time.Second)
+
+	// Verify server is responsive
+	for i := 0; i < 10; i++ {
+		resp, err := http.Get(httpBaseURL + "/health")
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == 200 {
+				h.t.Log("✅ Server restarted successfully - rate limit buckets reset!")
+				return
+			}
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	h.t.Log("⚠️  Server may not be fully ready yet")
 }
 
 // CreateTestEvent creates and signs a Nostr event

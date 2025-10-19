@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  strfry-relay:
+    container_name: strfry-relay
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ./strfry.conf:/app/strfry.conf:ro
+      - ./strfry-db:/app/strfry-db
+    ports:
+      - "7777:7777"  # WebSocket relay port
+      - "8080:8080"  # HTTP API port
+    command: ["relay", "/app/strfry.conf"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /proc/1/status || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s

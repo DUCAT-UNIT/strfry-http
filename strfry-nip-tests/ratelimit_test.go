@@ -17,11 +17,15 @@ func TestRateLimitBasic(t *testing.T) {
 
 	h := NewTestHelper(t)
 
+	// Reset rate limit buckets to start with fresh state
+	h.ResetRateLimitBuckets()
+
 	// Make rapid requests until we hit the rate limit
-	// With config: 60/min, burst 2.0 = 120 capacity, so need >120 requests
+	// With config: 300/min (5/sec), burst 2.0 = 600 capacity
+	// With fresh bucket, 850 requests accounts for ~225 token refill during ~45s test
 	rateLimited := false
 	successCount := 0
-	attempts := 150 // More than burst capacity
+	attempts := 850 // More than burst capacity (600) + refill during test
 
 	for i := 0; i < attempts; i++ {
 		event := h.CreateWhitelistedEvent(1, "Rate limit test", nostr.Tags{})
@@ -39,11 +43,11 @@ func TestRateLimitBasic(t *testing.T) {
 		}
 	}
 
-	assert.True(t, rateLimited, "Should hit rate limit with %d rapid requests (burst capacity + refill = ~120 tokens)", attempts)
-	assert.Greater(t, successCount, 0, "Some requests should succeed before rate limiting")
+	assert.True(t, rateLimited, "Should hit rate limit with %d rapid requests", attempts)
+	assert.Greater(t, successCount, 600, "Should succeed for at least burst capacity (600)")
 	assert.Less(t, successCount, attempts, "Should not succeed for all requests")
 
-	t.Logf("✓ Rate limiting enforced: %d successful, then rate limited (burst capacity allows ~120 tokens)", successCount)
+	t.Logf("✓ Rate limiting enforced: %d successful, then rate limited (burst + refill during test)", successCount)
 }
 
 // TestRateLimitRecovery tests that rate limit recovers over time
@@ -54,8 +58,11 @@ func TestRateLimitRecovery(t *testing.T) {
 
 	h := NewTestHelper(t)
 
-	// Hit the rate limit
-	for i := 0; i < 70; i++ {
+	// Reset rate limit buckets to start with fresh state
+	h.ResetRateLimitBuckets()
+
+	// Hit the rate limit (600 capacity + ~225 refill during test)
+	for i := 0; i < 850; i++ {
 		event := h.CreateWhitelistedEvent(1, "Rate limit test", nostr.Tags{})
 		h.PostEventHTTP(event)
 	}
@@ -65,9 +72,15 @@ func TestRateLimitRecovery(t *testing.T) {
 	resp, _ := h.PostEventHTTP(event)
 	assert.Equal(t, 429, resp.StatusCode, "Should be rate limited")
 
-	// Wait for tokens to refill (60 per minute = 1 per second, wait 5 seconds)
+	// Wait for tokens to refill (300 per minute = 5 per second, wait 5 seconds = 25 tokens)
 	t.Log("Waiting 5 seconds for rate limit to recover...")
 	time.Sleep(5 * time.Second)
+
+	// Verify server is still responsive
+	healthResp, _ := h.HealthCheck()
+	if healthResp.StatusCode != 200 {
+		t.Fatal("Server health check failed after rate limit test")
+	}
 
 	// Try again - should succeed now
 	event2 := h.CreateWhitelistedEvent(1, "Should succeed after wait", nostr.Tags{})
@@ -86,10 +99,17 @@ func TestRateLimitPerIP(t *testing.T) {
 
 	h := NewTestHelper(t)
 
+	// Wait for bucket to refill from previous tests
+	t.Log("Waiting 10 seconds for bucket refill...")
+	time.Sleep(10 * time.Second)
+
 	// Make rapid requests to exhaust IP-based rate limit
-	for i := 0; i < 70; i++ {
+	for i := 0; i < 700; i++ {
 		event := h.CreateWhitelistedEvent(1, "IP rate limit test", nostr.Tags{})
-		h.PostEventHTTP(event)
+		resp, _ := h.PostEventHTTP(event)
+		if resp.StatusCode == 429 {
+			break // Already rate limited
+		}
 	}
 
 	// Next request from same IP should be rate limited
@@ -112,10 +132,13 @@ func TestRateLimitHealthCheckExempt(t *testing.T) {
 
 	h := NewTestHelper(t)
 
-	// Hit the rate limit with regular requests
-	for i := 0; i < 70; i++ {
+	// Hit the rate limit with regular requests (bucket should be partially depleted)
+	for i := 0; i < 700; i++ {
 		event := h.CreateWhitelistedEvent(1, "Rate limit test", nostr.Tags{})
-		h.PostEventHTTP(event)
+		resp, _ := h.PostEventHTTP(event)
+		if resp.StatusCode == 429 {
+			break // Already rate limited
+		}
 	}
 
 	// Health check should still work even when rate limited
@@ -136,10 +159,17 @@ func TestRateLimitRetryAfterHeader(t *testing.T) {
 
 	h := NewTestHelper(t)
 
-	// Hit the rate limit
-	for i := 0; i < 70; i++ {
+	// Wait for bucket to refill from previous tests
+	t.Log("Waiting 10 seconds for bucket refill...")
+	time.Sleep(10 * time.Second)
+
+	// Hit the rate limit - don't need full reset, just deplete what we have
+	for i := 0; i < 700; i++ {
 		event := h.CreateWhitelistedEvent(1, "Rate limit test", nostr.Tags{})
-		h.PostEventHTTP(event)
+		resp, _ := h.PostEventHTTP(event)
+		if resp.StatusCode == 429 {
+			break // Already rate limited, good enough for header test
+		}
 	}
 
 	// Check rate-limited response has Retry-After header
@@ -169,15 +199,15 @@ func TestRateLimitBurstCapacity(t *testing.T) {
 
 	h := NewTestHelper(t)
 
-	// Wait for bucket to refill from previous tests (60 tokens in 60 seconds = ~2 minutes for full refill)
-	// Wait 10 seconds to get at least 10 tokens for this test
+	// Wait for bucket to refill from previous tests (300 tokens in 60 seconds)
+	// Wait 10 seconds to get at least 50 tokens for this test
 	t.Log("Waiting 10 seconds for bucket refill...")
 	time.Sleep(10 * time.Second)
 
-	// With 60/min and 2.0 burst, should allow ~120 rapid requests (if bucket is fresh)
+	// With 300/min and 2.0 burst, should allow ~600 rapid requests (if bucket is fresh)
 	// But after previous tests, expect fewer
 	successCount := 0
-	burstSize := 130 // Slightly more than expected burst capacity
+	burstSize := 700 // Slightly more than expected burst capacity
 
 	for i := 0; i < burstSize; i++ {
 		event := h.CreateWhitelistedEvent(1, "Burst test", nostr.Tags{})
@@ -189,8 +219,8 @@ func TestRateLimitBurstCapacity(t *testing.T) {
 		}
 	}
 
-	// Should succeed for at least 10 requests (we waited 10s for ~10 tokens)
-	assert.GreaterOrEqual(t, successCount, 8, "Should allow some requests after refill")
+	// Should succeed for at least 50 requests (we waited 10s for ~50 tokens)
+	assert.GreaterOrEqual(t, successCount, 40, "Should allow some requests after refill")
 	assert.Less(t, successCount, burstSize, "Should eventually hit rate limit")
 
 	t.Logf("✓ Burst capacity allowed %d requests before rate limiting (bucket partially refilled)", successCount)
@@ -290,11 +320,11 @@ func TestRateLimitQueryEndpoint(t *testing.T) {
 	t.Log("Waiting 10 seconds for bucket refill...")
 	time.Sleep(10 * time.Second)
 
-	// Make many rapid queries
+	// Make many rapid queries (need >600 with 300/min, burst 2.0)
 	rateLimited := false
 	successCount := 0
 
-	for i := 0; i < 150; i++ {
+	for i := 0; i < 700; i++ {
 		resp, _ := h.QueryEventsHTTP("GET", map[string]string{
 			"authors": whitelistedPk,
 			"limit":   "10",
@@ -327,13 +357,13 @@ func TestRateLimitMixedOperations(t *testing.T) {
 	t.Log("Waiting 10 seconds for bucket refill...")
 	time.Sleep(10 * time.Second)
 
-	// Mix of POST events and GET queries
+	// Mix of POST events and GET queries (need >600 with 300/min, burst 2.0)
 	// Should share the same rate limit bucket
 	rateLimited := false
 	postCount := 0
 	queryCount := 0
 
-	for i := 0; i < 150; i++ {
+	for i := 0; i < 700; i++ {
 		if i%2 == 0 {
 			// POST event
 			event := h.CreateWhitelistedEvent(1, "Mixed test", nostr.Tags{})
@@ -370,10 +400,17 @@ func TestRateLimitErrorMessages(t *testing.T) {
 
 	h := NewTestHelper(t)
 
-	// Hit rate limit
-	for i := 0; i < 130; i++ {
+	// Wait for bucket to refill from previous tests
+	t.Log("Waiting 10 seconds for bucket refill...")
+	time.Sleep(10 * time.Second)
+
+	// Hit rate limit - don't need full reset, just deplete what we have
+	for i := 0; i < 700; i++ {
 		event := h.CreateWhitelistedEvent(1, "Error message test", nostr.Tags{})
-		h.PostEventHTTP(event)
+		resp, _ := h.PostEventHTTP(event)
+		if resp.StatusCode == 429 {
+			break // Already rate limited, good enough for message test
+		}
 	}
 
 	// Check error message structure
@@ -408,8 +445,11 @@ func TestRateLimitRecoveryAccuracy(t *testing.T) {
 
 	h := NewTestHelper(t)
 
-	// Hit rate limit
-	for i := 0; i < 130; i++ {
+	// Reset rate limit buckets to start with fresh state
+	h.ResetRateLimitBuckets()
+
+	// Hit rate limit (600 capacity + ~225 refill during test)
+	for i := 0; i < 850; i++ {
 		event := h.CreateWhitelistedEvent(1, "Recovery accuracy test", nostr.Tags{})
 		h.PostEventHTTP(event)
 	}
@@ -419,13 +459,13 @@ func TestRateLimitRecoveryAccuracy(t *testing.T) {
 	resp, _ := h.PostEventHTTP(event)
 	assert.Equal(t, 429, resp.StatusCode, "Should be rate limited")
 
-	// Wait exactly 3 seconds (should refill ~3 tokens at 1/sec)
+	// Wait exactly 3 seconds (should refill ~15 tokens at 5/sec with 300/min)
 	t.Log("Waiting 3 seconds for token refill...")
 	time.Sleep(3 * time.Second)
 
-	// Should be able to make ~3 requests now
+	// Should be able to make ~15 requests now
 	successCount := 0
-	for i := 0; i < 5; i++ {
+	for i := 0; i < 20; i++ {
 		event := h.CreateWhitelistedEvent(1, "After wait", nostr.Tags{})
 		resp, _ := h.PostEventHTTP(event)
 		if resp.StatusCode == 200 {
@@ -435,9 +475,9 @@ func TestRateLimitRecoveryAccuracy(t *testing.T) {
 		}
 	}
 
-	// Should succeed for 2-4 requests (accounting for timing variance)
-	assert.GreaterOrEqual(t, successCount, 2, "Should refill ~3 tokens in 3 seconds")
-	assert.LessOrEqual(t, successCount, 5, "Should not refill more than expected")
+	// Should succeed for 12-18 requests (accounting for timing variance)
+	assert.GreaterOrEqual(t, successCount, 10, "Should refill ~15 tokens in 3 seconds")
+	assert.LessOrEqual(t, successCount, 20, "Should not refill more than expected")
 
 	t.Logf("✓ Token refill accuracy: %d requests succeeded after 3s wait", successCount)
 }
@@ -518,11 +558,11 @@ func TestRateLimitGetEventByID(t *testing.T) {
 	h.AssertEventAccepted(result)
 	h.WaitForEvents(1, 100)
 
-	// Now make many rapid GET requests for this event
+	// Now make many rapid GET requests for this event (need >600 with 300/min, burst 2.0)
 	rateLimited := false
 	successCount := 0
 
-	for i := 0; i < 150; i++ {
+	for i := 0; i < 700; i++ {
 		resp, _ := h.GetEventByID(event.ID)
 		if resp.StatusCode == 429 {
 			rateLimited = true
@@ -614,10 +654,13 @@ func TestRateLimitHeadersPresent(t *testing.T) {
 
 	h := NewTestHelper(t)
 
-	// Hit rate limit
-	for i := 0; i < 130; i++ {
+	// Hit rate limit (bucket should be depleted by now from previous tests)
+	for i := 0; i < 700; i++ {
 		event := h.CreateWhitelistedEvent(1, "Headers test", nostr.Tags{})
-		h.PostEventHTTP(event)
+		resp, _ := h.PostEventHTTP(event)
+		if resp.StatusCode == 429 {
+			break // Already rate limited
+		}
 	}
 
 	// Get rate limited response
