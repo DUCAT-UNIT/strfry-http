@@ -7,34 +7,90 @@
 #include <sstream>
 
 // Simple Prometheus metrics collector for HTTP server
-// Thread-safe counters and histograms
+// Thread-safe: uses mutex for all operations to ensure consistency
+// Atomics are used only for simple counters that don't need map access
 class HttpMetrics {
 public:
+    // HTTP method enum to avoid string allocation per request
+    enum class Method : uint8_t {
+        GET = 0,
+        POST = 1,
+        OPTIONS = 2,
+        OTHER = 3
+    };
+
+    // Endpoint enum to avoid string allocation for duration tracking
+    enum class Endpoint : uint8_t {
+        API_QUOTES = 0,
+        API_QUERY = 1,
+        HEALTH = 2,
+        METRICS = 3,
+        OTHER = 4
+    };
+
     HttpMetrics() {
         reset();
     }
 
-    // Request counting
+    // Convert string method to enum (avoid allocation in hot path)
+    static Method methodFromString(const std::string& method) {
+        if (method == "GET") return Method::GET;
+        if (method == "POST") return Method::POST;
+        if (method == "OPTIONS") return Method::OPTIONS;
+        return Method::OTHER;
+    }
+
+    // Convert enum to string for output
+    static const char* methodToString(Method m) {
+        switch (m) {
+            case Method::GET: return "GET";
+            case Method::POST: return "POST";
+            case Method::OPTIONS: return "OPTIONS";
+            default: return "OTHER";
+        }
+    }
+
+    // Convert string endpoint to enum
+    static Endpoint endpointFromString(const std::string& endpoint) {
+        if (endpoint == "/api/quotes") return Endpoint::API_QUOTES;
+        if (endpoint == "/api/query") return Endpoint::API_QUERY;
+        if (endpoint == "/health") return Endpoint::HEALTH;
+        if (endpoint == "/metrics") return Endpoint::METRICS;
+        return Endpoint::OTHER;
+    }
+
+    // Convert endpoint enum to string for output
+    static const char* endpointToString(Endpoint e) {
+        switch (e) {
+            case Endpoint::API_QUOTES: return "/api/quotes";
+            case Endpoint::API_QUERY: return "/api/query";
+            case Endpoint::HEALTH: return "/health";
+            case Endpoint::METRICS: return "/metrics";
+            default: return "/other";
+        }
+    }
+
+    // Request counting - uses enum key to avoid string allocation
     void incrementRequestTotal(const std::string& method, int statusCode) {
         std::lock_guard<std::mutex> lock(mutex_);
-        std::string key = method + "_" + std::to_string(statusCode);
+        RequestKey key{methodFromString(method), statusCode};
         requestCounts_[key]++;
         totalRequests_++;
     }
 
-    // Rate limiting
+    // Rate limiting - simple atomic counters (no map access needed)
     void incrementRateLimitHits() {
-        rateLimitHits_++;
+        rateLimitHits_.fetch_add(1, std::memory_order_relaxed);
     }
 
     void incrementRateLimitBlocks() {
-        rateLimitBlocks_++;
+        rateLimitBlocks_.fetch_add(1, std::memory_order_relaxed);
     }
 
-    // Request duration tracking (in milliseconds)
+    // Request duration tracking (in milliseconds) - uses enum to avoid allocation
     void observeRequestDuration(const std::string& endpoint, uint64_t durationMs) {
         std::lock_guard<std::mutex> lock(mutex_);
-        auto& hist = requestDurations_[endpoint];
+        auto& hist = requestDurations_[endpointFromString(endpoint)];
         hist.count++;
         hist.sum += durationMs;
 
@@ -47,16 +103,16 @@ public:
         if (durationMs <= 5000) hist.le_5000++;
     }
 
-    // Event processing
+    // Event processing - simple atomic counters
     void incrementEventsAccepted() {
-        eventsAccepted_++;
+        eventsAccepted_.fetch_add(1, std::memory_order_relaxed);
     }
 
     void incrementEventsRejected() {
-        eventsRejected_++;
+        eventsRejected_.fetch_add(1, std::memory_order_relaxed);
     }
 
-    // Query metrics
+    // Query metrics - requires mutex for struct access
     void observeQueryResults(uint64_t resultCount) {
         std::lock_guard<std::mutex> lock(mutex_);
         queryResultCounts_.count++;
@@ -72,43 +128,47 @@ public:
         ss << "# HELP http_requests_total Total number of HTTP requests\n";
         ss << "# TYPE http_requests_total counter\n";
         for (const auto& [key, count] : requestCounts_) {
-            size_t pos = key.find('_');
-            std::string method = key.substr(0, pos);
-            std::string status = key.substr(pos + 1);
-            ss << "http_requests_total{method=\"" << method
-               << "\",status=\"" << status << "\"} " << count << "\n";
+            ss << "http_requests_total{method=\"" << methodToString(key.method)
+               << "\",status=\"" << key.statusCode << "\"} " << count << "\n";
         }
         ss << "http_requests_total_all " << totalRequests_ << "\n";
 
         ss << "\n# HELP http_request_duration_milliseconds HTTP request duration\n";
         ss << "# TYPE http_request_duration_milliseconds histogram\n";
         for (const auto& [endpoint, hist] : requestDurations_) {
-            ss << "http_request_duration_milliseconds_bucket{endpoint=\"" << endpoint << "\",le=\"10\"} " << hist.le_10 << "\n";
-            ss << "http_request_duration_milliseconds_bucket{endpoint=\"" << endpoint << "\",le=\"50\"} " << hist.le_50 << "\n";
-            ss << "http_request_duration_milliseconds_bucket{endpoint=\"" << endpoint << "\",le=\"100\"} " << hist.le_100 << "\n";
-            ss << "http_request_duration_milliseconds_bucket{endpoint=\"" << endpoint << "\",le=\"500\"} " << hist.le_500 << "\n";
-            ss << "http_request_duration_milliseconds_bucket{endpoint=\"" << endpoint << "\",le=\"1000\"} " << hist.le_1000 << "\n";
-            ss << "http_request_duration_milliseconds_bucket{endpoint=\"" << endpoint << "\",le=\"5000\"} " << hist.le_5000 << "\n";
-            ss << "http_request_duration_milliseconds_bucket{endpoint=\"" << endpoint << "\",le=\"+Inf\"} " << hist.count << "\n";
-            ss << "http_request_duration_milliseconds_sum{endpoint=\"" << endpoint << "\"} " << hist.sum << "\n";
-            ss << "http_request_duration_milliseconds_count{endpoint=\"" << endpoint << "\"} " << hist.count << "\n";
+            const char* endpointStr = endpointToString(endpoint);
+            ss << "http_request_duration_milliseconds_bucket{endpoint=\"" << endpointStr << "\",le=\"10\"} " << hist.le_10 << "\n";
+            ss << "http_request_duration_milliseconds_bucket{endpoint=\"" << endpointStr << "\",le=\"50\"} " << hist.le_50 << "\n";
+            ss << "http_request_duration_milliseconds_bucket{endpoint=\"" << endpointStr << "\",le=\"100\"} " << hist.le_100 << "\n";
+            ss << "http_request_duration_milliseconds_bucket{endpoint=\"" << endpointStr << "\",le=\"500\"} " << hist.le_500 << "\n";
+            ss << "http_request_duration_milliseconds_bucket{endpoint=\"" << endpointStr << "\",le=\"1000\"} " << hist.le_1000 << "\n";
+            ss << "http_request_duration_milliseconds_bucket{endpoint=\"" << endpointStr << "\",le=\"5000\"} " << hist.le_5000 << "\n";
+            ss << "http_request_duration_milliseconds_bucket{endpoint=\"" << endpointStr << "\",le=\"+Inf\"} " << hist.count << "\n";
+            ss << "http_request_duration_milliseconds_sum{endpoint=\"" << endpointStr << "\"} " << hist.sum << "\n";
+            ss << "http_request_duration_milliseconds_count{endpoint=\"" << endpointStr << "\"} " << hist.count << "\n";
         }
+
+        // Load atomic values once for consistent snapshot
+        uint64_t rateLimitHitsSnapshot = rateLimitHits_.load(std::memory_order_relaxed);
+        uint64_t rateLimitBlocksSnapshot = rateLimitBlocks_.load(std::memory_order_relaxed);
+        uint64_t eventsAcceptedSnapshot = eventsAccepted_.load(std::memory_order_relaxed);
+        uint64_t eventsRejectedSnapshot = eventsRejected_.load(std::memory_order_relaxed);
 
         ss << "\n# HELP http_rate_limit_hits_total Total rate limit checks\n";
         ss << "# TYPE http_rate_limit_hits_total counter\n";
-        ss << "http_rate_limit_hits_total " << rateLimitHits_ << "\n";
+        ss << "http_rate_limit_hits_total " << rateLimitHitsSnapshot << "\n";
 
         ss << "\n# HELP http_rate_limit_blocks_total Total rate limit blocks\n";
         ss << "# TYPE http_rate_limit_blocks_total counter\n";
-        ss << "http_rate_limit_blocks_total " << rateLimitBlocks_ << "\n";
+        ss << "http_rate_limit_blocks_total " << rateLimitBlocksSnapshot << "\n";
 
         ss << "\n# HELP nostr_events_accepted_total Total events accepted\n";
         ss << "# TYPE nostr_events_accepted_total counter\n";
-        ss << "nostr_events_accepted_total " << eventsAccepted_ << "\n";
+        ss << "nostr_events_accepted_total " << eventsAcceptedSnapshot << "\n";
 
         ss << "\n# HELP nostr_events_rejected_total Total events rejected\n";
         ss << "# TYPE nostr_events_rejected_total counter\n";
-        ss << "nostr_events_rejected_total " << eventsRejected_ << "\n";
+        ss << "nostr_events_rejected_total " << eventsRejectedSnapshot << "\n";
 
         ss << "\n# HELP nostr_query_results Query result counts\n";
         ss << "# TYPE nostr_query_results summary\n";
@@ -123,10 +183,10 @@ public:
         requestCounts_.clear();
         requestDurations_.clear();
         totalRequests_ = 0;
-        rateLimitHits_ = 0;
-        rateLimitBlocks_ = 0;
-        eventsAccepted_ = 0;
-        eventsRejected_ = 0;
+        rateLimitHits_.store(0, std::memory_order_relaxed);
+        rateLimitBlocks_.store(0, std::memory_order_relaxed);
+        eventsAccepted_.store(0, std::memory_order_relaxed);
+        eventsRejected_.store(0, std::memory_order_relaxed);
         queryResultCounts_ = SummaryData{};
     }
 
@@ -147,13 +207,27 @@ private:
         uint64_t sum = 0;
     };
 
+    // Struct key for request counts using enum to avoid string allocation
+    struct RequestKey {
+        Method method;
+        int statusCode;
+
+        bool operator<(const RequestKey& other) const {
+            if (method != other.method) return static_cast<int>(method) < static_cast<int>(other.method);
+            return statusCode < other.statusCode;
+        }
+    };
+
+    // Mutex protects map-based data structures
     std::mutex mutex_;
-    std::map<std::string, uint64_t> requestCounts_;
-    std::map<std::string, HistogramData> requestDurations_;
-    std::atomic<uint64_t> totalRequests_{0};
+    std::map<RequestKey, uint64_t> requestCounts_;
+    std::map<Endpoint, HistogramData> requestDurations_;  // Using enum key to avoid allocation
+    uint64_t totalRequests_ = 0;  // Protected by mutex (used with requestCounts_)
+    SummaryData queryResultCounts_;  // Protected by mutex
+
+    // Standalone atomic counters - don't require map access
     std::atomic<uint64_t> rateLimitHits_{0};
     std::atomic<uint64_t> rateLimitBlocks_{0};
     std::atomic<uint64_t> eventsAccepted_{0};
     std::atomic<uint64_t> eventsRejected_{0};
-    SummaryData queryResultCounts_;
 };

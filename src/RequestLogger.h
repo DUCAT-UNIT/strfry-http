@@ -5,16 +5,22 @@
 #include <random>
 #include <sstream>
 #include <iomanip>
+#include <mutex>
 
 class RequestLogger {
 public:
-    // Generate a unique request ID
+    // Generate a unique request ID (thread-safe)
     static std::string generateRequestId() {
+        static std::mutex mtx;
         static std::random_device rd;
         static std::mt19937_64 gen(rd());
         static std::uniform_int_distribution<uint64_t> dis;
 
-        uint64_t id = dis(gen);
+        uint64_t id;
+        {
+            std::lock_guard<std::mutex> lock(mtx);
+            id = dis(gen);
+        }
         std::stringstream ss;
         ss << std::hex << std::setw(16) << std::setfill('0') << id;
         return ss.str();
