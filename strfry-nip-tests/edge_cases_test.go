@@ -195,7 +195,8 @@ func TestInvalidHTTPMethods(t *testing.T) {
 		path    string
 		invalid []string
 	}{
-		{"/api/quotes", []string{"GET", "PUT", "DELETE", "PATCH"}},
+		// Note: GET is valid for /api/quotes (queries by d-tag)
+		{"/api/quotes", []string{"PUT", "DELETE", "PATCH"}},
 		{"/health", []string{"POST", "PUT", "DELETE", "PATCH"}},
 	}
 
