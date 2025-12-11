@@ -115,7 +115,10 @@ void RelayServer::runHttpServer()
         env.lmdb_env,
         env.dbi_Event__id,
         cfg().relay__http__bind,
-        cfg().relay__http__cors
+        cfg().relay__http__cors,
+        cfg().relay__http__trustProxy,
+        "*",  // CORS origin (default)
+        cfg().relay__http__maxBodySize
     );
     
     LI << "HTTP API enabled on " << cfg().relay__http__bind << ":" << cfg().relay__http__port;
@@ -157,7 +160,7 @@ void RelayServer::runHttpServer()
             }});
             
             if (resultFuture.wait_for(std::chrono::seconds(cfg().relay__http__timeout)) == std::future_status::timeout) {
-                errorMsg = "Event processing timeout";
+                errorMsg = "Event processing timeout for event: " + eventId.substr(0, 16) + "...";
                 LE << "HTTP event processing timeout: " << eventId;
                 return false;
             }

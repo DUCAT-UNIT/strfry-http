@@ -146,6 +146,12 @@ config:
   - name: relay__http__timeout
     desc: "Timeout for HTTP event processing in seconds"
     default: 5
+  - name: relay__http__trustProxy
+    desc: "Trust X-Forwarded-For and X-Real-IP headers (only enable if behind a trusted reverse proxy)"
+    default: false
+  - name: relay__http__maxBodySize
+    desc: "Maximum request body size in bytes (default 1MB, max recommended 8MB for Nostr events)"
+    default: 1048576
 
   - name: relay__whitelist__enabled
     desc: "Enable pubkey whitelist for event submission"

@@ -1,33 +1,286 @@
 #include "HttpServer.h"
 #include "httplib.h"
-#include <nlohmann/json.hpp>
 #include "events.h"
 #include "golpe.h"
 #include "DBQuery.h"
 #include "Decompressor.h"
+#include <stdexcept>
 
-using json = nlohmann::json;
+// Use tao::json consistently throughout (already included via golpe.h)
+// JSON helper class to provide nlohmann-like syntax with tao::json
+class json;
+
+// Wrapper for JSON values to support nlohmann-like .get<T>() syntax
+class JsonValueRef {
+public:
+    const tao::json::value& ref;
+    JsonValueRef(const tao::json::value& r) : ref(r) {}
+
+    template<typename T>
+    T get() const { return ref.as<T>(); }
+
+    bool is_string() const { return ref.is_string(); }
+    bool is_number() const { return ref.is_number(); }
+    bool is_array() const { return ref.is_array(); }
+};
+
+class json {
+public:
+    tao::json::value val;
+
+    json() : val(tao::json::empty_object) {}
+    json(std::initializer_list<std::pair<const char*, tao::json::value>> init) : val(tao::json::empty_object) {
+        for (const auto& [key, v] : init) {
+            val[key] = v;
+        }
+    }
+    json(const tao::json::value& v) : val(v) {}
+
+    std::string dump(int indent = -1) const {
+        if (indent >= 0) {
+            return tao::json::to_string(val, indent);
+        }
+        return tao::json::to_string(val);
+    }
+
+    // For reading parsed JSON - returns wrapper with get<T>() support
+    bool contains(const std::string& key) const { return val.find(key) != nullptr; }
+    JsonValueRef operator[](const std::string& key) const { return JsonValueRef(val.at(key)); }
+
+    bool is_string() const { return val.is_string(); }
+    bool is_number() const { return val.is_number(); }
+    bool is_array() const { return val.is_array(); }
+
+    template<typename T>
+    T get() const { return val.as<T>(); }
+
+    struct parse_error : public std::runtime_error {
+        using std::runtime_error::runtime_error;
+    };
+
+    static json parse(const std::string& str) {
+        try {
+            return json(tao::json::from_string(str));
+        } catch (const std::exception& e) {
+            throw parse_error(e.what());
+        }
+    }
+};
+
+// Maximum number of events to return in a single query to prevent unbounded responses
+static constexpr uint64_t MAX_QUERY_RESULTS = 10000;
+
+// Helper to safely parse double from config string
+static double safeParseDouble(const std::string& str, double defaultVal) {
+    try {
+        return std::stod(str);
+    } catch (const std::exception& e) {
+        LW << "Failed to parse config value '" << str << "' as double, using default: " << defaultVal;
+        return defaultVal;
+    }
+}
+
+// Validate IP address format with proper structure validation
+// Returns true if the string is a valid IPv4 or IPv6 address
+static bool isValidIPv4(const std::string& ip) {
+    if (ip.empty() || ip.size() > 15) return false;  // Max "255.255.255.255"
+
+    int octets = 0;
+    int currentValue = 0;
+    int digitCount = 0;
+    bool lastWasDot = true;  // Start true to catch leading dot
+
+    for (size_t i = 0; i < ip.size(); i++) {
+        char c = ip[i];
+        if (c == '.') {
+            if (lastWasDot || digitCount == 0) return false;  // ".." or leading "."
+            if (currentValue > 255) return false;
+            octets++;
+            currentValue = 0;
+            digitCount = 0;
+            lastWasDot = true;
+        } else if (c >= '0' && c <= '9') {
+            // Check for leading zeros (invalid: "01.01.01.01")
+            if (digitCount == 1 && currentValue == 0) return false;
+            currentValue = currentValue * 10 + (c - '0');
+            if (currentValue > 255) return false;
+            digitCount++;
+            if (digitCount > 3) return false;
+            lastWasDot = false;
+        } else {
+            return false;  // Invalid character
+        }
+    }
+
+    // Must end with a valid octet, not a dot
+    if (lastWasDot || digitCount == 0) return false;
+    if (currentValue > 255) return false;
+    octets++;
+
+    return octets == 4;
+}
+
+static bool isValidIPv6(const std::string& ip) {
+    if (ip.empty() || ip.size() > 45) return false;  // Max with IPv4-mapped
+
+    // Check for IPv4-mapped address (::ffff:192.168.1.1)
+    size_t lastColon = ip.rfind(':');
+    if (lastColon != std::string::npos && lastColon + 1 < ip.size()) {
+        std::string suffix = ip.substr(lastColon + 1);
+        if (suffix.find('.') != std::string::npos) {
+            // Has IPv4 suffix - validate the IPv4 part
+            if (!isValidIPv4(suffix)) return false;
+            // Continue validating the IPv6 prefix (before the IPv4 part)
+            // For simplicity, just check prefix has valid IPv6 chars and structure
+        }
+    }
+
+    int colonCount = 0;
+    int doubleColonCount = 0;
+    int groupCount = 0;
+    int hexDigits = 0;
+    bool lastWasColon = false;
+
+    for (size_t i = 0; i < ip.size(); i++) {
+        char c = ip[i];
+        if (c == ':') {
+            if (lastWasColon) {
+                doubleColonCount++;
+                if (doubleColonCount > 1) return false;  // Only one :: allowed
+            } else if (hexDigits > 0) {
+                groupCount++;
+                hexDigits = 0;
+            }
+            colonCount++;
+            lastWasColon = true;
+        } else if (c == '.') {
+            // IPv4-mapped portion - already validated above
+            break;
+        } else if ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+            hexDigits++;
+            if (hexDigits > 4) return false;  // Max 4 hex digits per group
+            lastWasColon = false;
+        } else {
+            return false;  // Invalid character
+        }
+    }
+
+    // Count final group if present
+    if (hexDigits > 0) groupCount++;
+
+    // Valid IPv6 has 8 groups, or fewer with :: compression
+    if (doubleColonCount == 0 && groupCount != 8) return false;
+    if (doubleColonCount == 1 && groupCount > 7) return false;
+
+    // Must have at least one colon
+    return colonCount >= 2;
+}
+
+static bool isValidIPAddress(const std::string& ip) {
+    if (ip.empty() || ip.size() > 45) return false;
+
+    // Try IPv4 first (more common)
+    if (ip.find(':') == std::string::npos) {
+        return isValidIPv4(ip);
+    }
+
+    // Must be IPv6
+    return isValidIPv6(ip);
+}
+
+// Sanitize user input for safe logging (prevents log injection attacks)
+static std::string sanitizeForLog(const std::string& input, size_t maxLen = 100) {
+    std::string result;
+    result.reserve(std::min(input.size(), maxLen));
+
+    for (size_t i = 0; i < input.size() && result.size() < maxLen; ++i) {
+        char c = input[i];
+        // Only allow printable ASCII characters, replace others
+        if (c >= 32 && c < 127 && c != '\n' && c != '\r') {
+            result += c;
+        } else {
+            result += '?';
+        }
+    }
+
+    if (input.size() > maxLen) {
+        result += "...[truncated]";
+    }
+
+    return result;
+}
+
+// Sanitize error messages before sending to client
+// Removes potentially sensitive internal details like file paths, memory addresses, etc.
+static std::string sanitizeErrorForClient(const std::string& errorMsg) {
+    // For JSON parse errors, keep enough detail to be useful but not internal paths
+    if (errorMsg.find("parse") != std::string::npos ||
+        errorMsg.find("JSON") != std::string::npos ||
+        errorMsg.find("json") != std::string::npos) {
+        // Keep position info but truncate long messages
+        if (errorMsg.size() > 100) {
+            return errorMsg.substr(0, 100) + "...";
+        }
+        return errorMsg;
+    }
+
+    // For other errors, return generic messages to avoid leaking internals
+    if (errorMsg.find("LMDB") != std::string::npos ||
+        errorMsg.find("lmdb") != std::string::npos ||
+        errorMsg.find("database") != std::string::npos) {
+        return "Database error";
+    }
+
+    if (errorMsg.find("memory") != std::string::npos ||
+        errorMsg.find("alloc") != std::string::npos) {
+        return "Server resource error";
+    }
+
+    // For filter/query related errors, keep them as they're user-facing
+    if (errorMsg.find("filter") != std::string::npos ||
+        errorMsg.find("invalid") != std::string::npos ||
+        errorMsg.find("parameter") != std::string::npos) {
+        if (errorMsg.size() > 150) {
+            return errorMsg.substr(0, 150) + "...";
+        }
+        return errorMsg;
+    }
+
+    // Default: truncate and sanitize
+    if (errorMsg.size() > 100) {
+        return "Internal error";
+    }
+    return errorMsg;
+}
 
 HttpServer::HttpServer(uint16_t port, lmdb::env& envRef, lmdb::dbi& dbiRef,
-                       const std::string &bindAddr, bool enableCors)
-    : port(port), bindAddr(bindAddr), enableCors(enableCors), env(envRef), dbi_dbById(dbiRef)
+                       const std::string &bindAddr, bool enableCors, bool trustProxy,
+                       const std::string &corsOrigin, size_t maxBodySize)
+    : port(port), bindAddr(bindAddr), enableCors(enableCors), trustProxy(trustProxy),
+      corsOrigin(corsOrigin), env(envRef), dbi_dbById(dbiRef)
 {
     server = std::make_unique<httplib::Server>();
 
-    // Initialize rate limiter
+    // Set maximum request body size to prevent large payload attacks
+    server->set_payload_max_length(maxBodySize);
+    LI << "HTTP server max request body size: " << maxBodySize << " bytes";
+
+    // Initialize rate limiter with safe config parsing
     RateLimiter::Config rateLimitConfig;
     rateLimitConfig.enabled = cfg().relay__ratelimit__enabled;
     rateLimitConfig.perIpPerMinute = cfg().relay__ratelimit__perIpPerMinute;
     rateLimitConfig.perPubkeyPerMinute = cfg().relay__ratelimit__perPubkeyPerMinute;
     rateLimitConfig.globalPerMinute = cfg().relay__ratelimit__globalPerMinute;
-    rateLimitConfig.burstMultiplier = std::stod(cfg().relay__ratelimit__burstMultiplier);
+    rateLimitConfig.burstMultiplier = safeParseDouble(cfg().relay__ratelimit__burstMultiplier, 2.0);
     rateLimitConfig.cleanupIntervalSeconds = cfg().relay__ratelimit__cleanupIntervalSeconds;
     rateLimiter = std::make_unique<RateLimiter>(rateLimitConfig);
 
     // Initialize metrics collector
     metrics = std::make_unique<HttpMetrics>();
 
-    LI << "HTTP server initialized with logging and metrics enabled";
+    LI << "HTTP server initialized with logging and metrics enabled"
+       << " (trustProxy=" << (trustProxy ? "true" : "false")
+       << ", corsOrigin=" << corsOrigin << ")";
 
     setupRoutes();
 }
@@ -39,66 +292,61 @@ HttpServer::~HttpServer()
 
 void HttpServer::setEventProcessor(std::function<bool(const std::string&, std::string&)> processor)
 {
+    std::lock_guard<std::mutex> lock(eventProcessorMutex_);
     eventProcessor = processor;
 }
 
 void HttpServer::setupRoutes()
 {
-    // Set up security and CORS headers
+    // Pre-routing handler: security headers, CORS, request tracking, and rate limiting
     server->set_pre_routing_handler([this](const httplib::Request& req, httplib::Response& res) {
-        // Generate request ID and add to response headers for tracing
+        // Track active requests for graceful shutdown
+        // Using relaxed ordering is safe here (see decrementActiveRequests for details)
+        activeRequests_.fetch_add(1, std::memory_order_relaxed);
+
+        // Set up request tracing
         std::string reqId = RequestLogger::generateRequestId();
         res.set_header("X-Request-ID", reqId);
         uint64_t startMs = RequestLogger::getTimestampMs();
 
-        // Store request ID in response (we'll log after response is sent)
-        res.set_header("X-Start-Time", std::to_string(startMs));
-
-        // CORS headers
-        if (enableCors) {
-            res.set_header("Access-Control-Allow-Origin", "*");
-            res.set_header("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
-            res.set_header("Access-Control-Allow-Headers", "Content-Type");
-        }
-
-        // Security headers
-        res.set_header("X-Content-Type-Options", "nosniff");
-        res.set_header("X-Frame-Options", "DENY");
-        res.set_header("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'");
-        res.set_header("X-XSS-Protection", "1; mode=block");
-        res.set_header("Referrer-Policy", "no-referrer");
+        // Set up headers using extracted methods
+        setupCorsHeaders(res);
+        setupSecurityHeaders(res);
 
         // Log incoming request
         std::string clientIP = getClientIP(req);
         logRequest(reqId, req.method, req.path, clientIP);
 
+        // Handle CORS preflight requests
         if (req.method == "OPTIONS" && enableCors) {
             res.status = 200;
             metrics->incrementRequestTotal("OPTIONS", 200);
             logResponse(reqId, 200, RequestLogger::getTimestampMs() - startMs);
+            decrementActiveRequests();
             return httplib::Server::HandlerResponse::Handled;
         }
 
-        // Rate limiting check (skip for health check and metrics)
+        // Rate limiting check (skip for health check and metrics endpoints)
         if (req.path != "/health" && req.path != "/metrics" && rateLimiter) {
             std::string pubkey = extractPubkeyFromRequest(req);
 
             metrics->incrementRateLimitHits();
-            if (!rateLimiter->checkAndConsume(clientIP, pubkey)) {
+            auto checkResult = rateLimiter->checkAndConsume(clientIP, pubkey);
+            if (!checkResult.allowed) {
                 metrics->incrementRateLimitBlocks();
-                res.status = 429; // Too Many Requests
+                res.status = 429;
                 res.set_header("Retry-After", "60");
 
-                std::string reason = rateLimiter->getRateLimitReason();
-                logRateLimit(reqId, clientIP, reason);
+                logRateLimit(reqId, clientIP, checkResult.reason);
 
                 res.set_content(json({
                     {"ok", false},
-                    {"message", reason}
+                    {"message", checkResult.reason}
                 }).dump(), "application/json");
 
                 metrics->incrementRequestTotal(req.method, 429);
                 logResponse(reqId, 429, RequestLogger::getTimestampMs() - startMs);
+                decrementActiveRequests();
                 return httplib::Server::HandlerResponse::Handled;
             }
         }
@@ -148,6 +396,11 @@ void HttpServer::setupRoutes()
         };
         res.set_content(response.dump(2), "application/json");
     });
+
+    // Post-routing handler to decrement active request count
+    server->set_post_routing_handler([this](const httplib::Request& req, httplib::Response& res) {
+        decrementActiveRequests();
+    });
 }
 
 void HttpServer::handleEventPost(const httplib::Request& req, httplib::Response& res)
@@ -156,16 +409,21 @@ void HttpServer::handleEventPost(const httplib::Request& req, httplib::Response&
     std::string reqId = res.get_header_value("X-Request-ID");
 
     try {
+        // Parse JSON once and reuse
         json eventJson = json::parse(req.body);
 
-        if (!eventJson.contains("id") || !eventJson.contains("pubkey") ||
-            !eventJson.contains("created_at") || !eventJson.contains("kind") ||
-            !eventJson.contains("tags") || !eventJson.contains("content") ||
-            !eventJson.contains("sig")) {
+        // Validate required fields (single pass)
+        if (!eventJson.contains("id") || !eventJson["id"].is_string() ||
+            !eventJson.contains("pubkey") || !eventJson["pubkey"].is_string() ||
+            !eventJson.contains("created_at") || !eventJson["created_at"].is_number() ||
+            !eventJson.contains("kind") || !eventJson["kind"].is_number() ||
+            !eventJson.contains("tags") || !eventJson["tags"].is_array() ||
+            !eventJson.contains("content") || !eventJson["content"].is_string() ||
+            !eventJson.contains("sig") || !eventJson["sig"].is_string()) {
             res.status = 400;
             res.set_content(json({
                 {"ok", false},
-                {"message", "Invalid event structure: missing required fields"}
+                {"message", "Invalid event structure: missing or invalid required fields"}
             }).dump(), "application/json");
             metrics->incrementRequestTotal("POST", 400);
             metrics->observeRequestDuration("/api/quotes", RequestLogger::getTimestampMs() - startMs);
@@ -173,29 +431,27 @@ void HttpServer::handleEventPost(const httplib::Request& req, httplib::Response&
             return;
         }
 
-        std::string eventStr = req.body;
-        if (!hasRequiredEventFields(eventStr)) {
-            res.status = 400;
-            res.set_content(json({
-                {"ok", false},
-                {"message", "Invalid event structure"}
-            }).dump(), "application/json");
-            metrics->incrementRequestTotal("POST", 400);
-            metrics->observeRequestDuration("/api/quotes", RequestLogger::getTimestampMs() - startMs);
-            logResponse(reqId, 400, RequestLogger::getTimestampMs() - startMs);
-            return;
-        }
-
+        std::string eventId = eventJson["id"].get<std::string>();
         std::string errorMsg;
-        if (eventProcessor && eventProcessor(eventStr, errorMsg)) {
+        bool accepted = false;
+
+        // Thread-safe call to event processor
+        {
+            std::lock_guard<std::mutex> lock(eventProcessorMutex_);
+            if (eventProcessor) {
+                accepted = eventProcessor(req.body, errorMsg);
+            }
+        }
+
+        if (accepted) {
             metrics->incrementEventsAccepted();
             res.status = 200;
             res.set_content(json({
                 {"ok", true},
                 {"message", "Quote accepted"},
-                {"id", eventJson["id"]}
+                {"id", eventId}
             }).dump(), "application/json");
-            LI << "[" << reqId << "] Event accepted: " << std::string(eventJson["id"]).substr(0, 8) << "...";
+            LI << "[" << reqId << "] Event accepted: " << eventId.substr(0, 8) << "...";
         } else {
             metrics->incrementEventsRejected();
             res.status = 400;
@@ -212,7 +468,7 @@ void HttpServer::handleEventPost(const httplib::Request& req, httplib::Response&
         res.status = 400;
         res.set_content(json({
             {"ok", false},
-            {"message", std::string("Invalid JSON: ") + e.what()}
+            {"message", std::string("Invalid JSON: ") + sanitizeErrorForClient(e.what())}
         }).dump(), "application/json");
         metrics->incrementRequestTotal("POST", 400);
         metrics->observeRequestDuration("/api/quotes", RequestLogger::getTimestampMs() - startMs);
@@ -222,7 +478,7 @@ void HttpServer::handleEventPost(const httplib::Request& req, httplib::Response&
         res.status = 500;
         res.set_content(json({
             {"ok", false},
-            {"message", std::string("Internal error: ") + e.what()}
+            {"message", "Internal server error"}  // Don't expose internal details
         }).dump(), "application/json");
         metrics->incrementRequestTotal("POST", 500);
         metrics->observeRequestDuration("/api/quotes", RequestLogger::getTimestampMs() - startMs);
@@ -254,7 +510,18 @@ void HttpServer::handleGetQuote(const httplib::Request& req, httplib::Response& 
 
         LI << "[" << reqId << "] GET request for event: " << eventId;
 
-        std::string eventIdBytes = from_hex(eventId);
+        std::string eventIdBytes;
+        try {
+            eventIdBytes = from_hex(eventId);
+            if (eventIdBytes.size() != 32) {
+                throw std::runtime_error("Invalid event ID length");
+            }
+        } catch (const std::exception& e) {
+            res.status = 400;
+            res.set_content(json({{"error", "Invalid event ID format"}}).dump(), "application/json");
+            metrics->incrementRequestTotal("GET", 400);
+            return;
+        }
 
         auto txn = lmdb::txn::begin(env, nullptr, MDB_RDONLY);
         auto existing = lookupEventById(txn, std::string_view(eventIdBytes));
@@ -284,7 +551,7 @@ void HttpServer::handleGetQuote(const httplib::Request& req, httplib::Response& 
         LE << "[" << reqId << "] Query error: " << e.what();
         res.status = 500;
         res.set_content(json({
-            {"error", std::string("Query error: ") + e.what()}
+            {"error", "Internal server error"}  // Don't expose internal details
         }).dump(), "application/json");
         metrics->incrementRequestTotal("GET", 500);
     }
@@ -307,26 +574,17 @@ void HttpServer::handleGetQuoteByDTag(const httplib::Request& req, httplib::Resp
             return;
         }
 
+        std::string safeDTag = sanitizeForLog(dTag, 64);
         LI << "[" << reqId << "] Fetching event by d tag from relay"
-           << " url=\"http://localhost:" << port << "/api/quotes?d=" << dTag << "\""
-           << " dTag=" << dTag;
+           << " url=\"http://localhost:" << port << "/api/quotes?d=" << safeDTag << "\""
+           << " dTag=" << safeDTag;
 
-        // Build a Nostr filter for the 'd' tag
-        // Filter format: {"#d": ["<dTag>"], "limit": 1}
-        std::string filterStr = R"({"#d":[")" + dTag + R"("],"limit":1})";
-        tao::json::value filterJson;
-        try {
-            filterJson = tao::json::from_string(filterStr);
-        } catch (const std::exception& e) {
-            LE << "[" << reqId << "] Failed to parse filter JSON: " << e.what();
-            res.status = 500;
-            res.set_content(json({
-                {"error", std::string("Failed to build filter: ") + e.what()}
-            }).dump(), "application/json");
-            metrics->incrementRequestTotal("GET", 500);
-            logResponse(reqId, 500, RequestLogger::getTimestampMs() - startMs);
-            return;
-        }
+        // Build a Nostr filter for the 'd' tag using proper JSON construction
+        // This safely handles special characters in dTag
+        tao::json::value filterJson = {
+            {"#d", tao::json::value::array({dTag})},
+            {"limit", 1}
+        };
 
         // Query the database
         auto txn = lmdb::txn::begin(env, nullptr, MDB_RDONLY);
@@ -346,7 +604,7 @@ void HttpServer::handleGetQuoteByDTag(const httplib::Request& req, httplib::Resp
             LE << "[" << reqId << "] Filter error: " << e.what();
             res.status = 500;
             res.set_content(json({
-                {"error", std::string("Filter error: ") + e.what()}
+                {"error", "Internal server error"}  // Don't expose internal details
             }).dump(), "application/json");
             metrics->incrementRequestTotal("GET", 500);
             logResponse(reqId, 500, RequestLogger::getTimestampMs() - startMs);
@@ -356,17 +614,17 @@ void HttpServer::handleGetQuoteByDTag(const httplib::Request& req, httplib::Resp
         txn.commit();
 
         if (!found) {
-            LI << "[" << reqId << "] Event not found for d tag: " << dTag;
+            LI << "[" << reqId << "] Event not found for d tag: " << safeDTag;
             res.status = 404;
             res.set_content(json({
-                {"error", "event not found for d tag: " + dTag}
+                {"error", "event not found for specified d tag"}
             }).dump(), "application/json");
             metrics->incrementRequestTotal("GET", 404);
             logResponse(reqId, 404, RequestLogger::getTimestampMs() - startMs);
             return;
         }
 
-        LI << "[" << reqId << "] Returning event for d tag: " << dTag;
+        LI << "[" << reqId << "] Returning event for d tag: " << safeDTag;
         res.status = 200;
         res.set_content(eventJsonStr, "application/json");
         metrics->incrementRequestTotal("GET", 200);
@@ -376,7 +634,7 @@ void HttpServer::handleGetQuoteByDTag(const httplib::Request& req, httplib::Resp
         LE << "[" << reqId << "] Query error: " << e.what();
         res.status = 500;
         res.set_content(json({
-            {"error", std::string("Query error: ") + e.what()}
+            {"error", "Internal server error"}  // Don't expose internal details
         }).dump(), "application/json");
         metrics->incrementRequestTotal("GET", 500);
         logResponse(reqId, 500, RequestLogger::getTimestampMs() - startMs);
@@ -393,19 +651,6 @@ void HttpServer::handleHealthCheck(const httplib::Request &req, httplib::Respons
     metrics->incrementRequestTotal("GET", 200);
 }
 
-// Check if event JSON has required fields (structural validation only)
-// Full cryptographic validation happens later in the ingester pipeline
-bool HttpServer::hasRequiredEventFields(const std::string& jsonStr)
-{
-    try {
-        json eventJson = json::parse(jsonStr);
-        return eventJson.contains("id") &&
-               eventJson.contains("pubkey") &&
-               eventJson.contains("sig");
-    } catch (...) {
-        return false;
-    }
-}
 
 void HttpServer::handleQuery(const httplib::Request& req, httplib::Response& res)
 {
@@ -419,7 +664,7 @@ void HttpServer::handleQuery(const httplib::Request& req, httplib::Response& res
             } catch (const std::exception& e) {
                 res.status = 400;
                 res.set_content(json({
-                    {"error", std::string("Invalid JSON in request body: ") + e.what()}
+                    {"error", std::string("Invalid JSON in request body: ") + sanitizeErrorForClient(e.what())}
                 }).dump(), "application/json");
                 return;
             }
@@ -504,36 +749,54 @@ void HttpServer::handleQuery(const httplib::Request& req, httplib::Response& res
             filterJson = filterObj;
         }
 
-        // Query the database
-        json response = json::array();
+        // Query the database - build JSON array directly to avoid per-event parsing overhead
+        std::string reqId = res.get_header_value("X-Request-ID");
         auto txn = lmdb::txn::begin(env, nullptr, MDB_RDONLY);
         Decompressor decomp;
 
+        // Build JSON array incrementally without parsing each event
+        std::string responseStr = "[";
+        uint64_t resultCount = 0;
+        bool first = true;
+
         try {
             foreachByFilter(txn, filterJson, [&](uint64_t levId) {
+                // Enforce maximum result limit to prevent unbounded responses
+                if (resultCount >= MAX_QUERY_RESULTS) {
+                    return;  // Stop processing more results
+                }
+
                 std::string_view eventJsonStr = getEventJson(txn, decomp, levId);
-                json eventData = json::parse(std::string(eventJsonStr));
-                response.push_back(eventData);
+                if (!first) {
+                    responseStr += ",";
+                }
+                first = false;
+                responseStr += eventJsonStr;
+                resultCount++;
             });
         } catch (const std::exception& e) {
             txn.abort();
-            res.status = 400;
+            // Distinguish between filter/query errors and internal errors
+            std::string errMsg = e.what();
+            bool isFilterError = errMsg.find("filter") != std::string::npos ||
+                                 errMsg.find("invalid") != std::string::npos;
+            res.status = isFilterError ? 400 : 500;
             res.set_content(json({
-                {"error", std::string("Filter error: ") + e.what()}
+                {"error", isFilterError ? sanitizeErrorForClient(errMsg) : "Internal server error"}
             }).dump(), "application/json");
+            metrics->incrementRequestTotal(req.method, res.status);
             return;
         }
 
+        responseStr += "]";
         txn.commit();
 
-        std::string reqId = res.get_header_value("X-Request-ID");
-        uint64_t resultCount = response.size();
         metrics->observeQueryResults(resultCount);
         metrics->incrementRequestTotal(req.method, 200);
 
         LI << "[" << reqId << "] Query returned " << resultCount << " events";
         res.status = 200;
-        res.set_content(response.dump(), "application/json");
+        res.set_content(responseStr, "application/json");
 
     } catch (const std::exception& e) {
         std::string reqId = res.get_header_value("X-Request-ID");
@@ -541,15 +804,29 @@ void HttpServer::handleQuery(const httplib::Request& req, httplib::Response& res
         LE << "[" << reqId << "] Query error: " << e.what();
         res.status = 500;
         res.set_content(json({
-            {"error", std::string("Query error: ") + e.what()}
+            {"error", "Internal server error"}  // Don't expose internal details
         }).dump(), "application/json");
     }
 }
 
-void HttpServer::start()
+bool HttpServer::start()
 {
     LI << "Starting HTTP server on " << bindAddr << ":" << port;
-    server->listen(bindAddr.c_str(), port);
+    try {
+        bool success = server->listen(bindAddr.c_str(), port);
+        if (!success) {
+            LE << "Failed to start HTTP server on " << bindAddr << ":" << port
+               << " (address may be in use or permission denied)";
+            return false;
+        }
+        return true;
+    } catch (const std::exception& e) {
+        LE << "HTTP server failed to start: " << e.what();
+        return false;
+    } catch (...) {
+        LE << "HTTP server failed to start with unknown error";
+        return false;
+    }
 }
 
 void HttpServer::stop()
@@ -568,22 +845,43 @@ void HttpServer::gracefulShutdown(int timeoutSeconds)
 
     LI << "Initiating graceful shutdown of HTTP server (timeout: " << timeoutSeconds << "s)...";
 
-    // Stop accepting new connections but allow existing ones to complete
-    // cpp-httplib doesn't have a native graceful shutdown, so we:
-    // 1. Wait briefly for in-flight requests to complete
-    // 2. Then force stop
+    // Signal that we're shutting down (release ordering for visibility to request handlers)
+    shuttingDown_.store(true, std::memory_order_release);
 
     auto startTime = std::chrono::steady_clock::now();
     auto timeout = std::chrono::seconds(timeoutSeconds);
 
-    // Give a brief moment for in-flight requests to complete
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    // Wait for active requests to complete using condition variable
+    {
+        std::unique_lock<std::mutex> lock(shutdownMutex_);
+        int activeCount = activeRequests_.load(std::memory_order_acquire);
+
+        if (activeCount > 0) {
+            LI << "Waiting for " << activeCount << " active request(s) to complete...";
+
+            // Wait with timeout - condition variable is notified when activeRequests_ reaches 0
+            bool completed = shutdownCv_.wait_for(lock, timeout, [this] {
+                return activeRequests_.load(std::memory_order_acquire) == 0;
+            });
+
+            if (!completed) {
+                int remaining = activeRequests_.load(std::memory_order_acquire);
+                LW << "Graceful shutdown timeout reached with " << remaining << " active requests, forcing stop";
+            }
+        }
+    }
 
     auto elapsed = std::chrono::steady_clock::now() - startTime;
-    if (elapsed < timeout) {
-        LI << "Graceful shutdown completed in " << std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count() << "ms";
-    } else {
-        LW << "Graceful shutdown timeout reached, forcing stop";
+    auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
+
+    int finalCount = activeRequests_.load(std::memory_order_acquire);
+    if (finalCount == 0) {
+        LI << "All requests completed, shutting down HTTP server (took " << elapsedMs << "ms)";
+    }
+
+    // Stop the rate limiter's cleanup thread
+    if (rateLimiter) {
+        rateLimiter->stop();
     }
 
     server->stop();
@@ -592,23 +890,60 @@ void HttpServer::gracefulShutdown(int timeoutSeconds)
 
 std::string HttpServer::getClientIP(const httplib::Request& req)
 {
-    // Check for X-Forwarded-For header (if behind proxy)
-    if (req.has_header("X-Forwarded-For")) {
-        std::string xff = req.get_header_value("X-Forwarded-For");
-        // Take the first IP in the list
-        size_t commaPos = xff.find(',');
-        if (commaPos != std::string::npos) {
-            return xff.substr(0, commaPos);
+    // Only trust proxy headers if explicitly configured
+    // This prevents IP spoofing attacks when not behind a trusted proxy
+    if (trustProxy) {
+        // Check for X-Forwarded-For header (if behind proxy)
+        if (req.has_header("X-Forwarded-For")) {
+            std::string xff = req.get_header_value("X-Forwarded-For");
+            // Take the first IP in the list (original client)
+            std::string ip;
+            size_t commaPos = xff.find(',');
+            if (commaPos != std::string::npos) {
+                // Trim whitespace
+                ip = xff.substr(0, commaPos);
+                size_t start = ip.find_first_not_of(" \t");
+                size_t end = ip.find_last_not_of(" \t");
+                if (start != std::string::npos && end != std::string::npos) {
+                    ip = ip.substr(start, end - start + 1);
+                }
+            } else {
+                // Trim whitespace from single IP
+                size_t start = xff.find_first_not_of(" \t");
+                size_t end = xff.find_last_not_of(" \t");
+                if (start != std::string::npos && end != std::string::npos) {
+                    ip = xff.substr(start, end - start + 1);
+                } else {
+                    ip = xff;
+                }
+            }
+
+            // Validate IP format to prevent spoofing with arbitrary strings
+            if (isValidIPAddress(ip)) {
+                return ip;
+            }
+            // Invalid IP in header - fall back to remote_addr
+            LW << "Invalid IP address in X-Forwarded-For header: " << sanitizeForLog(ip, 50);
         }
-        return xff;
+
+        // Check for X-Real-IP header (nginx style)
+        if (req.has_header("X-Real-IP")) {
+            std::string realIP = req.get_header_value("X-Real-IP");
+            // Trim whitespace
+            size_t start = realIP.find_first_not_of(" \t");
+            size_t end = realIP.find_last_not_of(" \t");
+            if (start != std::string::npos && end != std::string::npos) {
+                realIP = realIP.substr(start, end - start + 1);
+            }
+
+            if (isValidIPAddress(realIP)) {
+                return realIP;
+            }
+            LW << "Invalid IP address in X-Real-IP header: " << sanitizeForLog(realIP, 50);
+        }
     }
 
-    // Check for X-Real-IP header (nginx style)
-    if (req.has_header("X-Real-IP")) {
-        return req.get_header_value("X-Real-IP");
-    }
-
-    // Fall back to remote address
+    // Fall back to remote address (always safe)
     return req.remote_addr;
 }
 
@@ -619,17 +954,41 @@ std::string HttpServer::extractPubkeyFromRequest(const httplib::Request& req)
         return "";
     }
 
-    try {
-        json eventJson = json::parse(req.body);
-        if (eventJson.contains("pubkey") && eventJson["pubkey"].is_string()) {
-            return eventJson["pubkey"].get<std::string>();
+    // Fast pubkey extraction using string search to avoid double JSON parsing
+    // (the actual handler will parse the full JSON later)
+    // Look for "pubkey":"<64 hex chars>" pattern
+    static const std::string pubkeyPrefix = "\"pubkey\":\"";
+    size_t pos = req.body.find(pubkeyPrefix);
+    if (pos == std::string::npos) {
+        // Try with space after colon
+        static const std::string pubkeyPrefixSpace = "\"pubkey\": \"";
+        pos = req.body.find(pubkeyPrefixSpace);
+        if (pos != std::string::npos) {
+            pos += pubkeyPrefixSpace.length();
         }
-    } catch (...) {
-        // If JSON parsing fails, just return empty string
-        // The actual endpoint will handle the error
+    } else {
+        pos += pubkeyPrefix.length();
     }
 
-    return "";
+    if (pos == std::string::npos || pos >= req.body.size()) {
+        return "";
+    }
+
+    // Extract exactly 64 hex characters (32 bytes = Nostr pubkey)
+    if (pos + 64 > req.body.size()) {
+        return "";
+    }
+
+    std::string pubkey = req.body.substr(pos, 64);
+
+    // Validate it's all hex characters
+    for (char c : pubkey) {
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))) {
+            return "";
+        }
+    }
+
+    return pubkey;
 }
 
 void HttpServer::logRequest(const std::string& reqId, const std::string& method,
@@ -660,4 +1019,32 @@ void HttpServer::handleMetrics(const httplib::Request& req, httplib::Response& r
     std::string metricsOutput = metrics->renderPrometheus();
     res.set_content(metricsOutput, "text/plain; version=0.0.4");
     res.status = 200;
+}
+
+void HttpServer::decrementActiveRequests()
+{
+    // Release ordering ensures all request processing is visible before decrement
+    // Notify condition variable if this was the last active request during shutdown
+    if (activeRequests_.fetch_sub(1, std::memory_order_release) == 1 &&
+        shuttingDown_.load(std::memory_order_acquire)) {
+        shutdownCv_.notify_one();
+    }
+}
+
+void HttpServer::setupSecurityHeaders(httplib::Response& res)
+{
+    res.set_header("X-Content-Type-Options", "nosniff");
+    res.set_header("X-Frame-Options", "DENY");
+    res.set_header("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'");
+    res.set_header("X-XSS-Protection", "1; mode=block");
+    res.set_header("Referrer-Policy", "no-referrer");
+}
+
+void HttpServer::setupCorsHeaders(httplib::Response& res)
+{
+    if (enableCors) {
+        res.set_header("Access-Control-Allow-Origin", corsOrigin);
+        res.set_header("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+        res.set_header("Access-Control-Allow-Headers", "Content-Type");
+    }
 }
