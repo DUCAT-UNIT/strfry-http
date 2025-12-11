@@ -1,4 +1,5 @@
 #include "RateLimiter.h"
+#include "golpe.h"
 #include <algorithm>
 
 RateLimiter::RateLimiter(const Config& config)
@@ -6,9 +7,55 @@ RateLimiter::RateLimiter(const Config& config)
       globalBucket_(
           config.globalPerMinute * config.burstMultiplier,
           config.globalPerMinute / 60.0  // Convert per-minute to per-second
-      ),
-      lastCleanup_(std::chrono::steady_clock::now())
+      )
 {
+    // Start background cleanup thread
+    if (config_.enabled && config_.cleanupIntervalSeconds > 0) {
+        cleanupThread_ = std::thread(&RateLimiter::cleanupThreadFunc, this);
+    }
+}
+
+RateLimiter::~RateLimiter() {
+    stop();
+}
+
+void RateLimiter::stop() {
+    if (running_.exchange(false)) {
+        cleanupCv_.notify_all();
+        if (cleanupThread_.joinable()) {
+            cleanupThread_.join();
+        }
+    }
+}
+
+void RateLimiter::cleanupThreadFunc() {
+    while (running_) {
+        try {
+            std::unique_lock<std::mutex> lock(cleanupMutex_);
+
+            // Wait for cleanup interval or until stopped
+            cleanupCv_.wait_for(lock, std::chrono::seconds(config_.cleanupIntervalSeconds), [this] {
+                return !running_.load();
+            });
+
+            if (!running_) break;
+
+            // Perform cleanup under the main mutex
+            {
+                std::lock_guard<std::mutex> dataLock(mutex_);
+                cleanup();
+            }
+        } catch (const std::exception& e) {
+            // Log error but continue running - cleanup is best-effort
+            LW << "RateLimiter cleanup thread error: " << e.what();
+            // Sleep briefly to avoid tight loop on persistent errors
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+        } catch (...) {
+            // Catch any other exceptions to prevent thread termination
+            LE << "RateLimiter cleanup thread unknown error";
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
+    }
 }
 
 bool RateLimiter::TokenBucket::consume(double amount) {
@@ -31,109 +78,176 @@ void RateLimiter::TokenBucket::refill() {
     lastRefill = now;
 }
 
-bool RateLimiter::checkBucket(const std::string& key,
-                               std::unordered_map<std::string, TokenBucket>& buckets,
-                               double capacity, double refillRate,
-                               const std::string& limitType) {
+// LRU Cache implementation - O(1) operations
+
+RateLimiter::TokenBucket* RateLimiter::LRUBucketCache::get(const std::string& key) {
     auto it = buckets.find(key);
-
     if (it == buckets.end()) {
-        // Create new bucket
-        auto result = buckets.emplace(key, TokenBucket(capacity, refillRate));
-        it = result.first;
+        return nullptr;
     }
-
-    if (!it->second.consume()) {
-        lastReason = "rate_limit_exceeded: " + limitType;
-        return false;
-    }
-
-    return true;
+    // Move to front of LRU list (most recently used)
+    touch(key, it->second.second);
+    return &it->second.first;
 }
 
-bool RateLimiter::checkAndConsume(const std::string& ipAddress, const std::string& pubkey) {
+RateLimiter::TokenBucket* RateLimiter::LRUBucketCache::insert(const std::string& key, TokenBucket&& bucket) {
+    // Add to front of LRU list
+    lruOrder.push_front(key);
+    auto listIt = lruOrder.begin();
+
+    // Insert into map with iterator to list position
+    auto result = buckets.emplace(key, std::make_pair(std::move(bucket), listIt));
+    return &result.first->second.first;
+}
+
+void RateLimiter::LRUBucketCache::touch(const std::string& key, std::list<std::string>::iterator it) {
+    // Move to front of LRU list - O(1) with splice
+    lruOrder.splice(lruOrder.begin(), lruOrder, it);
+}
+
+void RateLimiter::LRUBucketCache::evictOldest() {
+    if (lruOrder.empty()) return;
+
+    // Back of list is least recently used - O(1)
+    const std::string& oldestKey = lruOrder.back();
+    buckets.erase(oldestKey);
+    lruOrder.pop_back();
+}
+
+void RateLimiter::LRUBucketCache::eraseStale(double staleSeconds, size_t& removedCount) {
+    auto now = std::chrono::steady_clock::now();
+
+    // Iterate from back (oldest) and remove stale buckets
+    // Stop when we hit a non-stale bucket since list is in LRU order
+    while (!lruOrder.empty()) {
+        const std::string& key = lruOrder.back();
+        auto it = buckets.find(key);
+        if (it == buckets.end()) {
+            // Shouldn't happen, but clean up anyway
+            lruOrder.pop_back();
+            continue;
+        }
+
+        auto& bucket = it->second.first;
+        bucket.refill();
+
+        auto timeSinceRefill = std::chrono::duration<double>(now - bucket.lastRefill).count();
+        bool isStale = bucket.tokens >= bucket.capacity * 0.95 && timeSinceRefill > staleSeconds;
+
+        if (isStale) {
+            buckets.erase(it);
+            lruOrder.pop_back();
+            removedCount++;
+        } else {
+            // List is in LRU order, so if this one isn't stale, stop
+            // (more recently used items are even less likely to be stale)
+            break;
+        }
+    }
+}
+
+std::string RateLimiter::checkBucket(const std::string& key, LRUBucketCache& cache,
+                                      double capacity, double refillRate,
+                                      const std::string& limitType,
+                                      uint64_t maxBuckets) {
+    // Try to get existing bucket - O(1)
+    TokenBucket* bucket = cache.get(key);
+
+    if (!bucket) {
+        // Check if we've hit the max bucket limit
+        if (cache.size() >= maxBuckets) {
+            // Use LRU eviction to make room for new client - O(1)
+            cache.evictOldest();
+        }
+        // Create new bucket - O(1)
+        bucket = cache.insert(key, TokenBucket(capacity, refillRate));
+    }
+
+    if (!bucket->consume()) {
+        return "rate_limit_exceeded: " + limitType;
+    }
+
+    return "";  // Empty string means allowed
+}
+
+RateLimiter::CheckResult RateLimiter::checkAndConsume(const std::string& ipAddress, const std::string& pubkey) {
+    CheckResult result;
+
     if (!config_.enabled) {
-        return true;
+        return result;  // allowed = true by default
     }
 
     std::lock_guard<std::mutex> lock(mutex_);
 
-    totalRequests_++;
-    lastReason.clear();
+    totalRequests_.fetch_add(1, std::memory_order_relaxed);
 
     // Check global rate limit first (most restrictive)
     if (config_.globalPerMinute > 0) {
         if (!globalBucket_.consume()) {
-            lastReason = "rate_limit_exceeded: global";
-            rateLimitedRequests_++;
-            return false;
+            result.allowed = false;
+            result.reason = "rate_limit_exceeded: global";
+            rateLimitedRequests_.fetch_add(1, std::memory_order_relaxed);
+            return result;
         }
     }
 
-    // Check IP-based rate limit
+    // Check IP-based rate limit - O(1) with LRU cache
     if (config_.perIpPerMinute > 0 && !ipAddress.empty()) {
         double ipCapacity = config_.perIpPerMinute * config_.burstMultiplier;
         double ipRefillRate = config_.perIpPerMinute / 60.0;
 
-        if (!checkBucket(ipAddress, ipBuckets_, ipCapacity, ipRefillRate, "per_ip")) {
-            rateLimitedRequests_++;
-            return false;
+        std::string reason = checkBucket(ipAddress, ipCache_, ipCapacity, ipRefillRate,
+                                         "per_ip", config_.maxIpBuckets);
+        if (!reason.empty()) {
+            result.allowed = false;
+            result.reason = reason;
+            rateLimitedRequests_.fetch_add(1, std::memory_order_relaxed);
+            return result;
         }
     }
 
-    // Check pubkey-based rate limit
+    // Check pubkey-based rate limit - O(1) with LRU cache
     if (config_.perPubkeyPerMinute > 0 && !pubkey.empty()) {
         double pubkeyCapacity = config_.perPubkeyPerMinute * config_.burstMultiplier;
         double pubkeyRefillRate = config_.perPubkeyPerMinute / 60.0;
 
-        if (!checkBucket(pubkey, pubkeyBuckets_, pubkeyCapacity, pubkeyRefillRate, "per_pubkey")) {
-            rateLimitedRequests_++;
-            return false;
+        std::string reason = checkBucket(pubkey, pubkeyCache_, pubkeyCapacity, pubkeyRefillRate,
+                                         "per_pubkey", config_.maxPubkeyBuckets);
+        if (!reason.empty()) {
+            result.allowed = false;
+            result.reason = reason;
+            rateLimitedRequests_.fetch_add(1, std::memory_order_relaxed);
+            return result;
         }
     }
 
-    // Periodic cleanup
-    auto now = std::chrono::steady_clock::now();
-    auto timeSinceCleanup = std::chrono::duration<double>(now - lastCleanup_).count();
-    if (timeSinceCleanup >= config_.cleanupIntervalSeconds) {
-        cleanup();
-        lastCleanup_ = now;
-    }
-
-    return true;
+    return result;  // allowed = true
 }
 
 void RateLimiter::cleanup() {
-    // Remove buckets that are full and haven't been used recently
-    auto now = std::chrono::steady_clock::now();
+    // Note: Must be called while holding mutex_
+    // Remove stale buckets from back of LRU list (least recently used)
+    double staleSeconds = static_cast<double>(config_.staleBucketSeconds);
+    size_t ipRemoved = 0, pubkeyRemoved = 0;
 
-    auto cleanupBuckets = [&now](auto& buckets) {
-        for (auto it = buckets.begin(); it != buckets.end();) {
-            auto& bucket = it->second;
-            bucket.refill();
+    ipCache_.eraseStale(staleSeconds, ipRemoved);
+    pubkeyCache_.eraseStale(staleSeconds, pubkeyRemoved);
 
-            // If bucket is at full capacity and hasn't been used in 2+ minutes, remove it
-            auto timeSinceRefill = std::chrono::duration<double>(now - bucket.lastRefill).count();
-            if (bucket.tokens >= bucket.capacity * 0.99 && timeSinceRefill > 120.0) {
-                it = buckets.erase(it);
-            } else {
-                ++it;
-            }
-        }
-    };
-
-    cleanupBuckets(ipBuckets_);
-    cleanupBuckets(pubkeyBuckets_);
+    if (ipRemoved > 0 || pubkeyRemoved > 0) {
+        LI << "RateLimiter cleanup: removed " << ipRemoved << " IP buckets, "
+           << pubkeyRemoved << " pubkey buckets (remaining: "
+           << ipCache_.size() << " IP, " << pubkeyCache_.size() << " pubkey)";
+    }
 }
 
 RateLimiter::Stats RateLimiter::getStats() const {
     std::lock_guard<std::mutex> lock(mutex_);
 
     Stats stats;
-    stats.totalRequests = totalRequests_;
-    stats.rateLimitedRequests = rateLimitedRequests_;
-    stats.ipBuckets = ipBuckets_.size();
-    stats.pubkeyBuckets = pubkeyBuckets_.size();
+    stats.totalRequests = totalRequests_.load(std::memory_order_relaxed);
+    stats.rateLimitedRequests = rateLimitedRequests_.load(std::memory_order_relaxed);
+    stats.ipBuckets = ipCache_.size();
+    stats.pubkeyBuckets = pubkeyCache_.size();
 
     return stats;
 }
