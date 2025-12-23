@@ -7,6 +7,12 @@ include golpe/rules.mk
 LDLIBS += -lsecp256k1 -lzstd
 INCS += -Iexternal/negentropy/cpp
 
+# macOS homebrew include paths (for flatbuffers, secp256k1, etc.)
+ifeq ($(shell uname -s),Darwin)
+    INCS += -I/opt/homebrew/include
+    LDFLAGS += -L/opt/homebrew/lib
+endif
+
 build/StrfryTemplates.h: $(shell find src/tmpls/ -type f -name '*.tmpl')
 	PERL5LIB=golpe/vendor/ perl golpe/external/templar/templar.pl src/tmpls/ strfrytmpl $@
 

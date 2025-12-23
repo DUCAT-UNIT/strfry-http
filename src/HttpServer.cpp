@@ -366,6 +366,10 @@ void HttpServer::setupRoutes()
         handleEventPost(req, res);
     });
 
+    server->Post("/api/quotes/batch", [this](const httplib::Request& req, httplib::Response& res) {
+        handleEventPostBatch(req, res);
+    });
+
     server->Get("/api/quotes", [this](const httplib::Request& req, httplib::Response& res) {
         handleGetQuoteByDTag(req, res);
     });
@@ -388,6 +392,7 @@ void HttpServer::setupRoutes()
             {"version", "1.0.0"},
             {"endpoints", {
                 {"/api/quotes", "POST - Submit Nostr quote event"},
+                {"/api/quotes/batch", "POST - Submit batch of Nostr quote events (atomic)"},
                 {"/api/quotes/:id", "GET - Get quote by ID"},
                 {"/api/query", "GET - Query events"},
                 {"/health", "GET - Health check"},
@@ -483,6 +488,177 @@ void HttpServer::handleEventPost(const httplib::Request& req, httplib::Response&
         metrics->incrementRequestTotal("POST", 500);
         metrics->observeRequestDuration("/api/quotes", RequestLogger::getTimestampMs() - startMs);
         LE << "[" << reqId << "] Internal error: " << e.what();
+        logResponse(reqId, 500, RequestLogger::getTimestampMs() - startMs);
+    }
+}
+
+void HttpServer::handleEventPostBatch(const httplib::Request& req, httplib::Response& res)
+{
+    uint64_t startMs = RequestLogger::getTimestampMs();
+    std::string reqId = res.get_header_value("X-Request-ID");
+
+    try {
+        // Parse JSON array
+        tao::json::value batchJson;
+        try {
+            batchJson = tao::json::from_string(req.body);
+        } catch (const std::exception& e) {
+            res.status = 400;
+            res.set_content(json({
+                {"ok", false},
+                {"message", std::string("Invalid JSON: ") + sanitizeErrorForClient(e.what())}
+            }).dump(), "application/json");
+            metrics->incrementRequestTotal("POST", 400);
+            metrics->observeRequestDuration("/api/quotes/batch", RequestLogger::getTimestampMs() - startMs);
+            logResponse(reqId, 400, RequestLogger::getTimestampMs() - startMs);
+            return;
+        }
+
+        if (!batchJson.is_array()) {
+            res.status = 400;
+            res.set_content(json({
+                {"ok", false},
+                {"message", "Request body must be a JSON array of events"}
+            }).dump(), "application/json");
+            metrics->incrementRequestTotal("POST", 400);
+            metrics->observeRequestDuration("/api/quotes/batch", RequestLogger::getTimestampMs() - startMs);
+            logResponse(reqId, 400, RequestLogger::getTimestampMs() - startMs);
+            return;
+        }
+
+        const auto& events = batchJson.get_array();
+        size_t eventCount = events.size();
+
+        if (eventCount == 0) {
+            res.status = 400;
+            res.set_content(json({
+                {"ok", false},
+                {"message", "Empty event array"}
+            }).dump(), "application/json");
+            metrics->incrementRequestTotal("POST", 400);
+            metrics->observeRequestDuration("/api/quotes/batch", RequestLogger::getTimestampMs() - startMs);
+            logResponse(reqId, 400, RequestLogger::getTimestampMs() - startMs);
+            return;
+        }
+
+        // Limit batch size to prevent DoS
+        static constexpr size_t MAX_BATCH_SIZE = 1000;
+        if (eventCount > MAX_BATCH_SIZE) {
+            res.status = 400;
+            res.set_content(json({
+                {"ok", false},
+                {"message", "Batch size exceeds maximum of 1000 events"}
+            }).dump(), "application/json");
+            metrics->incrementRequestTotal("POST", 400);
+            metrics->observeRequestDuration("/api/quotes/batch", RequestLogger::getTimestampMs() - startMs);
+            logResponse(reqId, 400, RequestLogger::getTimestampMs() - startMs);
+            return;
+        }
+
+        LI << "[" << reqId << "] Processing batch of " << eventCount << " events";
+
+        // Validate and process each event - atomic: all must succeed
+        std::vector<std::string> acceptedIds;
+        acceptedIds.reserve(eventCount);
+
+        for (size_t i = 0; i < eventCount; i++) {
+            const auto& eventJson = events[i];
+
+            // Validate required fields
+            if (!eventJson.is_object()) {
+                res.status = 400;
+                res.set_content(json({
+                    {"ok", false},
+                    {"message", "Event at index " + std::to_string(i) + " is not an object"}
+                }).dump(), "application/json");
+                metrics->incrementRequestTotal("POST", 400);
+                metrics->observeRequestDuration("/api/quotes/batch", RequestLogger::getTimestampMs() - startMs);
+                logResponse(reqId, 400, RequestLogger::getTimestampMs() - startMs);
+                return;
+            }
+
+            const auto* idPtr = eventJson.find("id");
+            const auto* pubkeyPtr = eventJson.find("pubkey");
+            const auto* createdAtPtr = eventJson.find("created_at");
+            const auto* kindPtr = eventJson.find("kind");
+            const auto* tagsPtr = eventJson.find("tags");
+            const auto* contentPtr = eventJson.find("content");
+            const auto* sigPtr = eventJson.find("sig");
+
+            if (!idPtr || !idPtr->is_string() ||
+                !pubkeyPtr || !pubkeyPtr->is_string() ||
+                !createdAtPtr || !createdAtPtr->is_number() ||
+                !kindPtr || !kindPtr->is_number() ||
+                !tagsPtr || !tagsPtr->is_array() ||
+                !contentPtr || !contentPtr->is_string() ||
+                !sigPtr || !sigPtr->is_string()) {
+                res.status = 400;
+                res.set_content(json({
+                    {"ok", false},
+                    {"message", "Event at index " + std::to_string(i) + " has invalid structure"}
+                }).dump(), "application/json");
+                metrics->incrementRequestTotal("POST", 400);
+                metrics->observeRequestDuration("/api/quotes/batch", RequestLogger::getTimestampMs() - startMs);
+                logResponse(reqId, 400, RequestLogger::getTimestampMs() - startMs);
+                return;
+            }
+
+            std::string eventId = idPtr->as<std::string>();
+            std::string eventStr = tao::json::to_string(eventJson);
+            std::string errorMsg;
+            bool accepted = false;
+
+            // Thread-safe call to event processor
+            {
+                std::lock_guard<std::mutex> lock(eventProcessorMutex_);
+                if (eventProcessor) {
+                    accepted = eventProcessor(eventStr, errorMsg);
+                }
+            }
+
+            if (!accepted) {
+                // Atomic semantics: reject entire batch if any event fails
+                metrics->incrementEventsRejected();
+                res.status = 400;
+                res.set_content(json({
+                    {"ok", false},
+                    {"message", "Event at index " + std::to_string(i) + " rejected: " +
+                               (errorMsg.empty() ? "validation failed" : errorMsg)},
+                    {"failed_index", i},
+                    {"failed_id", eventId}
+                }).dump(), "application/json");
+                metrics->incrementRequestTotal("POST", 400);
+                metrics->observeRequestDuration("/api/quotes/batch", RequestLogger::getTimestampMs() - startMs);
+                LW << "[" << reqId << "] Batch rejected at index " << i << ": " << errorMsg;
+                logResponse(reqId, 400, RequestLogger::getTimestampMs() - startMs);
+                return;
+            }
+
+            acceptedIds.push_back(eventId);
+            metrics->incrementEventsAccepted();
+        }
+
+        // All events accepted
+        res.status = 201;
+        res.set_content(json({
+            {"ok", true},
+            {"message", "Batch accepted"},
+            {"count", eventCount}
+        }).dump(), "application/json");
+        metrics->incrementRequestTotal("POST", 201);
+        metrics->observeRequestDuration("/api/quotes/batch", RequestLogger::getTimestampMs() - startMs);
+        LI << "[" << reqId << "] Batch of " << eventCount << " events accepted";
+        logResponse(reqId, 201, RequestLogger::getTimestampMs() - startMs);
+
+    } catch (const std::exception& e) {
+        res.status = 500;
+        res.set_content(json({
+            {"ok", false},
+            {"message", "Internal server error"}
+        }).dump(), "application/json");
+        metrics->incrementRequestTotal("POST", 500);
+        metrics->observeRequestDuration("/api/quotes/batch", RequestLogger::getTimestampMs() - startMs);
+        LE << "[" << reqId << "] Batch processing error: " << e.what();
         logResponse(reqId, 500, RequestLogger::getTimestampMs() - startMs);
     }
 }
