@@ -61,6 +61,7 @@ private:
     void setupRoutes();
     void handleEventPost(const httplib::Request& req, httplib::Response& res);
     void handleEventPostBatch(const httplib::Request& req, httplib::Response& res);
+    void handleBatchFetch(const httplib::Request& req, httplib::Response& res);
     void handleGetQuote(const httplib::Request& req, httplib::Response& res);
     void handleGetQuoteByDTag(const httplib::Request& req, httplib::Response& res);
     void handleHealthCheck(const httplib::Request& req, httplib::Response& res);

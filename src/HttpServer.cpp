@@ -370,6 +370,10 @@ void HttpServer::setupRoutes()
         handleEventPostBatch(req, res);
     });
 
+    server->Post("/api/quotes/batch/fetch", [this](const httplib::Request& req, httplib::Response& res) {
+        handleBatchFetch(req, res);
+    });
+
     server->Get("/api/quotes", [this](const httplib::Request& req, httplib::Response& res) {
         handleGetQuoteByDTag(req, res);
     });
@@ -392,7 +396,8 @@ void HttpServer::setupRoutes()
             {"version", "1.0.0"},
             {"endpoints", {
                 {"/api/quotes", "POST - Submit Nostr quote event"},
-                {"/api/quotes/batch", "POST - Submit batch of Nostr quote events (atomic)"},
+                {"/api/quotes/batch", "POST - Submit batch of events (accepts array or {events: array})"},
+                {"/api/quotes/batch/fetch", "POST - Fetch batch of events by d_tags"},
                 {"/api/quotes/:id", "GET - Get quote by ID"},
                 {"/api/query", "GET - Query events"},
                 {"/health", "GET - Health check"},
@@ -498,7 +503,7 @@ void HttpServer::handleEventPostBatch(const httplib::Request& req, httplib::Resp
     std::string reqId = res.get_header_value("X-Request-ID");
 
     try {
-        // Parse JSON array
+        // Parse JSON
         tao::json::value batchJson;
         try {
             batchJson = tao::json::from_string(req.body);
@@ -514,11 +519,35 @@ void HttpServer::handleEventPostBatch(const httplib::Request& req, httplib::Resp
             return;
         }
 
-        if (!batchJson.is_array()) {
+        // Accept both formats:
+        // 1. Plain array: [event1, event2, ...]
+        // 2. Wrapped object: {"events": [event1, event2, ...]}
+        const tao::json::value* eventsArray = nullptr;
+
+        if (batchJson.is_array()) {
+            // Plain array format
+            eventsArray = &batchJson;
+        } else if (batchJson.is_object()) {
+            // Wrapped object format - look for "events" field
+            const auto* eventsPtr = batchJson.find("events");
+            if (eventsPtr && eventsPtr->is_array()) {
+                eventsArray = eventsPtr;
+            } else {
+                res.status = 400;
+                res.set_content(json({
+                    {"ok", false},
+                    {"message", "Request body must be a JSON array or object with 'events' array"}
+                }).dump(), "application/json");
+                metrics->incrementRequestTotal("POST", 400);
+                metrics->observeRequestDuration("/api/quotes/batch", RequestLogger::getTimestampMs() - startMs);
+                logResponse(reqId, 400, RequestLogger::getTimestampMs() - startMs);
+                return;
+            }
+        } else {
             res.status = 400;
             res.set_content(json({
                 {"ok", false},
-                {"message", "Request body must be a JSON array of events"}
+                {"message", "Request body must be a JSON array or object with 'events' array"}
             }).dump(), "application/json");
             metrics->incrementRequestTotal("POST", 400);
             metrics->observeRequestDuration("/api/quotes/batch", RequestLogger::getTimestampMs() - startMs);
@@ -526,7 +555,7 @@ void HttpServer::handleEventPostBatch(const httplib::Request& req, httplib::Resp
             return;
         }
 
-        const auto& events = batchJson.get_array();
+        const auto& events = eventsArray->get_array();
         size_t eventCount = events.size();
 
         if (eventCount == 0) {
@@ -638,12 +667,13 @@ void HttpServer::handleEventPostBatch(const httplib::Request& req, httplib::Resp
             metrics->incrementEventsAccepted();
         }
 
-        // All events accepted
+        // All events accepted - respond with format expected by CRE BatchPublishResponse
         res.status = 201;
         res.set_content(json({
-            {"ok", true},
-            {"message", "Batch accepted"},
-            {"count", eventCount}
+            {"success", true},
+            {"published", static_cast<int>(eventCount)},
+            {"failed", 0},
+            {"message", "Batch accepted"}
         }).dump(), "application/json");
         metrics->incrementRequestTotal("POST", 201);
         metrics->observeRequestDuration("/api/quotes/batch", RequestLogger::getTimestampMs() - startMs);
@@ -653,7 +683,9 @@ void HttpServer::handleEventPostBatch(const httplib::Request& req, httplib::Resp
     } catch (const std::exception& e) {
         res.status = 500;
         res.set_content(json({
-            {"ok", false},
+            {"success", false},
+            {"published", 0},
+            {"failed", 0},
             {"message", "Internal server error"}
         }).dump(), "application/json");
         metrics->incrementRequestTotal("POST", 500);
@@ -813,6 +845,168 @@ void HttpServer::handleGetQuoteByDTag(const httplib::Request& req, httplib::Resp
             {"error", "Internal server error"}  // Don't expose internal details
         }).dump(), "application/json");
         metrics->incrementRequestTotal("GET", 500);
+        logResponse(reqId, 500, RequestLogger::getTimestampMs() - startMs);
+    }
+}
+
+void HttpServer::handleBatchFetch(const httplib::Request& req, httplib::Response& res)
+{
+    uint64_t startMs = RequestLogger::getTimestampMs();
+    std::string reqId = res.get_header_value("X-Request-ID");
+
+    try {
+        // Parse JSON request
+        tao::json::value reqJson;
+        try {
+            reqJson = tao::json::from_string(req.body);
+        } catch (const std::exception& e) {
+            res.status = 400;
+            res.set_content(json({
+                {"success", false},
+                {"results", tao::json::empty_array},
+                {"message", std::string("Invalid JSON: ") + sanitizeErrorForClient(e.what())}
+            }).dump(), "application/json");
+            metrics->incrementRequestTotal("POST", 400);
+            metrics->observeRequestDuration("/api/quotes/batch/fetch", RequestLogger::getTimestampMs() - startMs);
+            logResponse(reqId, 400, RequestLogger::getTimestampMs() - startMs);
+            return;
+        }
+
+        // Extract d_tags array
+        const auto* dTagsPtr = reqJson.find("d_tags");
+        if (!dTagsPtr || !dTagsPtr->is_array()) {
+            res.status = 400;
+            res.set_content(json({
+                {"success", false},
+                {"results", tao::json::empty_array},
+                {"message", "Request body must contain 'd_tags' array"}
+            }).dump(), "application/json");
+            metrics->incrementRequestTotal("POST", 400);
+            metrics->observeRequestDuration("/api/quotes/batch/fetch", RequestLogger::getTimestampMs() - startMs);
+            logResponse(reqId, 400, RequestLogger::getTimestampMs() - startMs);
+            return;
+        }
+
+        const auto& dTags = dTagsPtr->get_array();
+        size_t tagCount = dTags.size();
+
+        if (tagCount == 0) {
+            res.status = 200;
+            res.set_content(json({
+                {"success", true},
+                {"results", tao::json::empty_array},
+                {"message", "No d_tags to fetch"}
+            }).dump(), "application/json");
+            metrics->incrementRequestTotal("POST", 200);
+            metrics->observeRequestDuration("/api/quotes/batch/fetch", RequestLogger::getTimestampMs() - startMs);
+            logResponse(reqId, 200, RequestLogger::getTimestampMs() - startMs);
+            return;
+        }
+
+        // Limit batch size to prevent DoS
+        static constexpr size_t MAX_BATCH_FETCH_SIZE = 1000;
+        if (tagCount > MAX_BATCH_FETCH_SIZE) {
+            res.status = 400;
+            res.set_content(json({
+                {"success", false},
+                {"results", tao::json::empty_array},
+                {"message", "Batch size exceeds maximum of 1000 d_tags"}
+            }).dump(), "application/json");
+            metrics->incrementRequestTotal("POST", 400);
+            metrics->observeRequestDuration("/api/quotes/batch/fetch", RequestLogger::getTimestampMs() - startMs);
+            logResponse(reqId, 400, RequestLogger::getTimestampMs() - startMs);
+            return;
+        }
+
+        LI << "[" << reqId << "] Batch fetching " << tagCount << " events by d_tags";
+
+        // Build results array
+        tao::json::value resultsArray = tao::json::empty_array;
+        auto txn = lmdb::txn::begin(env, nullptr, MDB_RDONLY);
+        Decompressor decomp;
+
+        for (size_t i = 0; i < tagCount; i++) {
+            const auto& dTagValue = dTags[i];
+            if (!dTagValue.is_string()) {
+                tao::json::value result = {
+                    {"d_tag", ""},
+                    {"error", "d_tag at index " + std::to_string(i) + " is not a string"}
+                };
+                resultsArray.get_array().push_back(result);
+                continue;
+            }
+
+            std::string dTag = dTagValue.as<std::string>();
+
+            // Build filter for this d_tag
+            tao::json::value filterJson = {
+                {"#d", tao::json::value::array({dTag})},
+                {"limit", 1}
+            };
+
+            std::string eventJsonStr;
+            bool found = false;
+
+            try {
+                foreachByFilter(txn, filterJson, [&](uint64_t levId) {
+                    if (!found) {
+                        eventJsonStr = getEventJson(txn, decomp, levId);
+                        found = true;
+                    }
+                });
+            } catch (const std::exception& e) {
+                std::string errMsg = std::string("filter error: ") + e.what();
+                tao::json::value result = {
+                    {"d_tag", dTag},
+                    {"error", errMsg}
+                };
+                resultsArray.get_array().push_back(result);
+                continue;
+            }
+
+            if (!found) {
+                tao::json::value result = {
+                    {"d_tag", dTag},
+                    {"error", "event not found"}
+                };
+                resultsArray.get_array().push_back(result);
+            } else {
+                // Parse the event JSON and include it in the result
+                tao::json::value eventJson = tao::json::from_string(eventJsonStr);
+                tao::json::value result = {
+                    {"d_tag", dTag},
+                    {"event", eventJson}
+                };
+                resultsArray.get_array().push_back(result);
+            }
+        }
+
+        txn.commit();
+
+        // Build response
+        tao::json::value response = {
+            {"success", true},
+            {"results", resultsArray},
+            {"message", "Batch fetch complete"}
+        };
+
+        res.status = 200;
+        res.set_content(tao::json::to_string(response), "application/json");
+        metrics->incrementRequestTotal("POST", 200);
+        metrics->observeRequestDuration("/api/quotes/batch/fetch", RequestLogger::getTimestampMs() - startMs);
+        LI << "[" << reqId << "] Batch fetch complete, returned " << tagCount << " results";
+        logResponse(reqId, 200, RequestLogger::getTimestampMs() - startMs);
+
+    } catch (const std::exception& e) {
+        LE << "[" << reqId << "] Batch fetch error: " << e.what();
+        res.status = 500;
+        res.set_content(json({
+            {"success", false},
+            {"results", tao::json::empty_array},
+            {"message", "Internal server error"}
+        }).dump(), "application/json");
+        metrics->incrementRequestTotal("POST", 500);
+        metrics->observeRequestDuration("/api/quotes/batch/fetch", RequestLogger::getTimestampMs() - startMs);
         logResponse(reqId, 500, RequestLogger::getTimestampMs() - startMs);
     }
 }
