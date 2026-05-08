@@ -51,6 +51,10 @@ void RelayServer::runWriter(ThreadPool<MsgWriter>::Thread &thr) {
 
                     if (okMsg.size()) LI << "[" << msg->connId << "] write policy blocked event " << eventIdHex << ": " << okMsg;
 
+                    // For HTTP requests, resolve the promise with rejection
+                    if (msg->resultPromise) {
+                        msg->resultPromise->set_value({false, okMsg.empty() ? "blocked by write policy" : okMsg, eventIdHex});
+                    }
                     sendOKResponse(msg->connId, eventIdHex, res == PluginEventSifterResult::ShadowReject, okMsg);
                 }
             }
@@ -75,30 +79,40 @@ void RelayServer::runWriter(ThreadPool<MsgWriter>::Thread &thr) {
                 std::string message = "Write error: ";
                 message += e.what();
 
+                // For HTTP requests, resolve the promise with error
+                if (addEventMsg->resultPromise) {
+                    addEventMsg->resultPromise->set_value({false, message, eventIdHex});
+                }
                 sendOKResponse(addEventMsg->connId, eventIdHex, false, message);
             }
 
             continue;
         }
 
-        // Log
+        // Log and resolve HTTP promises after actual persistence
 
         for (auto &newEvent : newEvents) {
             PackedEventView packed(newEvent.packedStr);
             auto eventIdHex = to_hex(packed.id());
             std::string message;
             bool written = false;
+            bool success = false;
 
             if (newEvent.status == EventWriteStatus::Written) {
                 LI << "Inserted event. id=" << eventIdHex << " levId=" << newEvent.levId;
                 written = true;
+                success = true;
+                message = "";
             } else if (newEvent.status == EventWriteStatus::Duplicate) {
                 message = "duplicate: have this event";
                 written = true;
+                success = true;  // Duplicates are considered successful (event exists)
             } else if (newEvent.status == EventWriteStatus::Replaced) {
                 message = "replaced: have newer event";
+                success = false;  // Event was NOT persisted
             } else if (newEvent.status == EventWriteStatus::Deleted) {
                 message = "deleted: user requested deletion";
+                success = false;  // Event was NOT persisted
             }
 
             if (newEvent.status != EventWriteStatus::Written) {
@@ -106,6 +120,12 @@ void RelayServer::runWriter(ThreadPool<MsgWriter>::Thread &thr) {
             }
 
             MsgWriter::AddEvent *addEventMsg = static_cast<MsgWriter::AddEvent*>(newEvent.userData);
+
+            // For HTTP requests, resolve the promise with the actual write result
+            // This ensures HTTP callers know whether the event was truly persisted
+            if (addEventMsg->resultPromise) {
+                addEventMsg->resultPromise->set_value({success, message, eventIdHex});
+            }
 
             sendOKResponse(addEventMsg->connId, eventIdHex, written, message);
         }

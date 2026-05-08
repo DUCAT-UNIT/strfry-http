@@ -270,16 +270,16 @@ void RelayServer::ingesterProcessEvent(
 
     LI << "Accepting event from " << (connId == 0 ? "HTTP" : "WebSocket") << ": " << eventIdHex;
 
-    if (resultPromise)
-    {
-        resultPromise->set_value({true, "accepted", eventIdHex});
-    }
-
+    // For HTTP requests (connId == 0), pass the promise to the Writer so it can
+    // signal completion after actual database persistence. This ensures HTTP
+    // callers wait for the event to be written, not just accepted.
+    // For WebSocket requests, the promise is not used (WebSocket gets OK response via sendOKResponse).
     output.emplace_back(MsgWriter{MsgWriter::AddEvent{
         connId,
         std::move(ipAddr),
         std::move(packedStr),
-        std::move(jsonStr)}});
+        std::move(jsonStr),
+        resultPromise}});
 }
 
 void RelayServer::ingesterProcessReq(lmdb::txn &txn, uint64_t connId, const tao::json::value &arr)

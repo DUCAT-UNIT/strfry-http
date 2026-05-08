@@ -74,6 +74,8 @@ struct MsgWriter : NonCopyable {
         std::string ipAddr;
         std::string packedStr;
         std::string jsonStr;
+        // Promise for HTTP requests to wait for actual persistence confirmation
+        std::shared_ptr<std::promise<ProcessResult>> resultPromise = nullptr;
     };
 
     struct CloseConn {
