@@ -70,6 +70,42 @@ public:
 // Maximum number of events to return in a single query to prevent unbounded responses
 static constexpr uint64_t MAX_QUERY_RESULTS = 10000;
 
+// Build d-tag filters by parsing canonical JSON so value types match filter parser expectations.
+static tao::json::value buildDTagFilter(const std::string& dTag) {
+    const std::string dTagJson = tao::json::to_string(tao::json::value(dTag));
+    const std::string filterJson = std::string("{\"#d\":[") + dTagJson + "],\"limit\":1}";
+    return tao::json::from_string(filterJson);
+}
+
+static tao::json::value buildKindFilter(uint64_t kind, uint64_t limit) {
+    tao::json::value filterObj = tao::json::empty_object;
+    std::vector<tao::json::value> kinds;
+    kinds.push_back(kind);
+    filterObj.get_object()["kinds"] = kinds;
+    filterObj.get_object()["limit"] = limit;
+    return filterObj;
+}
+
+static bool eventMatchesCommitHash(const std::string& eventJsonStr, const std::string& commitHash) {
+    try {
+        tao::json::value eventJson = tao::json::from_string(eventJsonStr);
+        const auto* contentPtr = eventJson.find("content");
+        if (!contentPtr || !contentPtr->is_string()) {
+            return false;
+        }
+
+        tao::json::value contentJson = tao::json::from_string(contentPtr->as<std::string>());
+        const auto* commitHashPtr = contentJson.find("commit_hash");
+        if (!commitHashPtr || !commitHashPtr->is_string()) {
+            return false;
+        }
+
+        return commitHashPtr->as<std::string>() == commitHash;
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
 // Helper to safely parse double from config string
 static double safeParseDouble(const std::string& str, double defaultVal) {
     try {
@@ -787,21 +823,15 @@ void HttpServer::handleGetQuoteByDTag(const httplib::Request& req, httplib::Resp
            << " url=\"http://localhost:" << port << "/api/quotes?d=" << safeDTag << "\""
            << " dTag=" << safeDTag;
 
-        // Build a Nostr filter for the 'd' tag using proper JSON construction
-        // This safely handles special characters in dTag
-        tao::json::value filterJson = {
-            {"#d", tao::json::value::array({dTag})},
-            {"limit", 1}
-        };
-
-        // Query the database
         auto txn = lmdb::txn::begin(env, nullptr, MDB_RDONLY);
         Decompressor decomp;
         std::string eventJsonStr;
         bool found = false;
 
+        // Primary lookup: #d tag match (current relay behavior).
         try {
-            foreachByFilter(txn, filterJson, [&](uint64_t levId) {
+            tao::json::value dTagFilter = buildDTagFilter(dTag);
+            foreachByFilter(txn, dTagFilter, [&](uint64_t levId) {
                 if (!found) {
                     eventJsonStr = getEventJson(txn, decomp, levId);
                     found = true;
@@ -812,17 +842,59 @@ void HttpServer::handleGetQuoteByDTag(const httplib::Request& req, httplib::Resp
             LE << "[" << reqId << "] Filter error: " << e.what();
             res.status = 500;
             res.set_content(json({
-                {"error", "Internal server error"}  // Don't expose internal details
+                {"error", "Internal server error"}
             }).dump(), "application/json");
             metrics->incrementRequestTotal("GET", 500);
             logResponse(reqId, 500, RequestLogger::getTimestampMs() - startMs);
             return;
         }
 
+        // Compatibility lookup: if d-tag misses, treat query value as commit_hash.
+        // This supports environments where events are tagged by thold_hash but clients query commit_hash.
+        if (!found) {
+            static constexpr uint64_t COMMIT_HASH_SCAN_LIMIT = 5000;
+            uint64_t scanned = 0;
+
+            LI << "[" << reqId << "] d-tag miss, attempting commit_hash lookup"
+               << " commit_hash=" << safeDTag;
+
+            try {
+                tao::json::value commitHashFilter = buildKindFilter(30078, COMMIT_HASH_SCAN_LIMIT);
+                foreachByFilter(txn, commitHashFilter, [&](uint64_t levId) {
+                    if (found || scanned >= COMMIT_HASH_SCAN_LIMIT) {
+                        return;
+                    }
+
+                    scanned += 1;
+                    std::string candidateJson(getEventJson(txn, decomp, levId));
+                    if (eventMatchesCommitHash(candidateJson, dTag)) {
+                        eventJsonStr = std::move(candidateJson);
+                        found = true;
+                    }
+                });
+            } catch (const std::exception& e) {
+                txn.abort();
+                LE << "[" << reqId << "] commit_hash fallback error: " << e.what();
+                res.status = 500;
+                res.set_content(json({
+                    {"error", "Internal server error"}
+                }).dump(), "application/json");
+                metrics->incrementRequestTotal("GET", 500);
+                logResponse(reqId, 500, RequestLogger::getTimestampMs() - startMs);
+                return;
+            }
+
+            if (found) {
+                LI << "[" << reqId << "] Found event by commit_hash fallback"
+                   << " commit_hash=" << safeDTag
+                   << " scanned=" << scanned;
+            }
+        }
+
         txn.commit();
 
         if (!found) {
-            LI << "[" << reqId << "] Event not found for d tag: " << safeDTag;
+            LI << "[" << reqId << "] Event not found for d tag or commit_hash: " << safeDTag;
             res.status = 404;
             res.set_content(json({
                 {"error", "event not found for specified d tag"}
@@ -842,7 +914,7 @@ void HttpServer::handleGetQuoteByDTag(const httplib::Request& req, httplib::Resp
         LE << "[" << reqId << "] Query error: " << e.what();
         res.status = 500;
         res.set_content(json({
-            {"error", "Internal server error"}  // Don't expose internal details
+            {"error", "Internal server error"}
         }).dump(), "application/json");
         metrics->incrementRequestTotal("GET", 500);
         logResponse(reqId, 500, RequestLogger::getTimestampMs() - startMs);
@@ -938,11 +1010,8 @@ void HttpServer::handleBatchFetch(const httplib::Request& req, httplib::Response
 
             std::string dTag = dTagValue.as<std::string>();
 
-            // Build filter for this d_tag
-            tao::json::value filterJson = {
-                {"#d", tao::json::value::array({dTag})},
-                {"limit", 1}
-            };
+            // Build filter via canonical JSON parsing to avoid tao::json variant mismatches.
+            tao::json::value filterJson = buildDTagFilter(dTag);
 
             std::string eventJsonStr;
             bool found = false;
