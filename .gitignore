@@ -6,3 +6,5 @@
 .vscode/*
 /strfry-db-test/
 strfry-nip-tests/coverage.out
+.DS_Store
+build.log
